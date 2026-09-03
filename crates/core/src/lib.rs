@@ -10,5 +10,10 @@
 //! Everything here is `no_std`-agnostic pure Rust and compiles for both native
 //! and `wasm32-unknown-unknown`.
 
+pub mod analysis;
 pub mod decode;
+pub mod histogram;
+pub mod kind;
+pub mod peers;
 pub mod proto;
+pub mod store;

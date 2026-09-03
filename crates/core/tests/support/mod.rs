@@ -5,6 +5,9 @@
 //! no place in a public repo. The `real_archive` test covers genuine data by
 //! pointing at a local file via `PEER_OBSERVER_ARCHIVE`.
 
+// Shared by several test binaries; each uses a different subset.
+#![allow(dead_code)]
+
 use archive_viewer_core::proto::{
     bitcoin_primitives::ConnType,
     ebpf_extractor::{
@@ -113,4 +116,13 @@ pub fn record_stream(header: &ArchiveHeader, events: &[Event]) -> Vec<u8> {
 /// A complete, properly terminated zstd archive.
 pub fn compress(bytes: &[u8], level: i32) -> Vec<u8> {
     zstd::stream::encode_all(bytes, level).expect("zstd compress")
+}
+
+/// An event with a timestamp but no oneof arm set. prost does not enforce
+/// proto2 `required`, so this decodes fine and must be classified, not dropped.
+pub fn event_without_an_arm(ts: u64) -> Event {
+    Event {
+        timestamp: ts,
+        peer_observer_event: None,
+    }
 }

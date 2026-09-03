@@ -333,6 +333,20 @@ fn read_varint(buf: &[u8]) -> Varint {
     }
 }
 
+impl core::fmt::Debug for RecordDecoder {
+    // ruzstd's FrameDecoder is not Debug, so summarise the interesting state.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RecordDecoder")
+            .field("compression", &self.compression)
+            .field("bytes_in", &self.bytes_in)
+            .field("bytes_out", &self.bytes_out)
+            .field("records", &self.records)
+            .field("pending_in", &self.cin.len())
+            .field("pending_out", &(self.out.len() - self.out_pos))
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
