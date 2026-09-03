@@ -159,6 +159,16 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// Transaction relay: who announced what first, and what duplicates cost.
+    pub fn relay(&self, sort: &str, descending: bool, limit: u32) -> String {
+        view::relay(&self.analysis, sort, descending, limit as usize).to_string()
+    }
+
+    /// How each kind of request fared, and how long the answers took.
+    pub fn exchanges(&self) -> String {
+        view::exchanges(&self.analysis).to_string()
+    }
+
     /// Load a Bitcoin Core asmap file, enabling the networks view.
     ///
     /// The page fetches this at runtime rather than embedding it: it is ~1.5 MB,

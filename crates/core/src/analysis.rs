@@ -4,13 +4,18 @@
 //! fed into it in order and are reported as one continuous archive.
 
 use crate::decode::{Completion, Compression, DecodeError, RecordDecoder, RecordSink};
+use crate::exchange::{self, Tracker};
 use crate::histogram::Histogram;
 use crate::kind::{classify, Group, KindTable};
+use crate::latency::Latencies;
 use crate::peers::PeerTable;
 use crate::proto::{
-    ebpf_extractor::ebpf::EbpfEvent, event::event::PeerObserverEvent, event::Event,
+    ebpf_extractor::{ebpf::EbpfEvent, message::MessageEvent},
+    event::event::PeerObserverEvent,
+    event::Event,
     header::ArchiveHeader,
 };
+use crate::relay::Relay;
 use crate::store::{flags, EventStore, NO_PEER};
 use crate::strip::strip_raw_payloads;
 use prost::Message;
@@ -37,6 +42,32 @@ pub struct FileSummary {
     pub error: Option<String>,
 }
 
+/// How one kind of request fared across the archive.
+///
+/// `opened - answered - unanswered` is the undetermined remainder: requests
+/// this tool could not judge either way. It is near zero for the exchanges
+/// Bitcoin Core sends one at a time, and can be large for the ones it
+/// pipelines -- see [`crate::exchange`] for why a displaced `getdata` is not
+/// evidence of anything.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExchangeStats {
+    /// Requests of this kind seen, in either direction.
+    pub opened: u64,
+    /// Of those, how many got at least one reply.
+    pub answered: u64,
+    /// Of those, how many were shown to have got none.
+    pub unanswered: u64,
+}
+
+impl ExchangeStats {
+    /// Requests whose fate could not be established.
+    pub fn undetermined(&self) -> u64 {
+        self.opened
+            .saturating_sub(self.answered)
+            .saturating_sub(self.unanswered)
+    }
+}
+
 /// Everything accumulated across the session.
 #[derive(Debug)]
 pub struct Analysis {
@@ -46,6 +77,17 @@ pub struct Analysis {
     pub histogram: Histogram,
     pub peers: PeerTable,
     pub store: EventStore,
+    /// Transaction relay: who announced what first, and what the duplicates cost.
+    pub relay: Relay,
+    /// Per-exchange request tallies, indexed the way [`exchange`] numbers them.
+    /// Name an index with [`exchange::request_name`].
+    pub exchanges: Vec<ExchangeStats>,
+    /// How long peers took to answer, split by exchange. A single per-peer
+    /// distribution mixes a ping round trip with a `getaddr` that Core answers
+    /// on a thirty-second timer; this is what makes the mixture readable.
+    pub reply_latency: Vec<Latencies>,
+    /// The same, for the requests this node answered.
+    pub our_reply_latency: Vec<Latencies>,
     pub files: Vec<FileSummary>,
     pub total_events: u64,
     pub decode_errors: u64,
@@ -57,6 +99,8 @@ pub struct Analysis {
     pub last_timestamp: Option<u64>,
     decoder: Option<RecordDecoder>,
     current_file: Option<usize>,
+    exchange_tracker: Tracker<u64>,
+    since_sweep: u32,
 }
 
 impl Analysis {
@@ -67,6 +111,10 @@ impl Analysis {
             histogram: Histogram::new(),
             peers: PeerTable::new(),
             store: EventStore::new(budget_bytes),
+            relay: Relay::new(),
+            exchanges: vec![ExchangeStats::default(); exchange::exchange_count()],
+            reply_latency: vec![Latencies::default(); exchange::exchange_count()],
+            our_reply_latency: vec![Latencies::default(); exchange::exchange_count()],
             files: Vec::new(),
             total_events: 0,
             decode_errors: 0,
@@ -76,6 +124,8 @@ impl Analysis {
             last_timestamp: None,
             decoder: None,
             current_file: None,
+            exchange_tracker: Tracker::new(),
+            since_sweep: 0,
         }
     }
 
@@ -127,6 +177,12 @@ impl Analysis {
             decoder.finish(&mut sink)
         };
         self.record_progress(&decoder, file);
+        // Anything still waiting at the end of the stream has either timed out --
+        // in which case it counts -- or is genuinely in flight, in which case
+        // the sweep leaves it alone.
+        if let Some(last) = self.last_timestamp {
+            self.sweep_exchanges(last);
+        }
 
         match result {
             Ok(completion) => {
@@ -186,6 +242,89 @@ impl Analysis {
             self.counts.resize(index + 1, 0);
         }
         self.counts[index] += 1;
+    }
+
+    /// How often to retire requests whose window has passed.
+    ///
+    /// The tracker only holds requests that are genuinely in flight, so this is
+    /// about keeping that true: without it, every connection that dies before
+    /// its handshake completes leaves an entry behind for the length of the
+    /// archive. Often enough to bound the table, rarely enough not to matter.
+    const SWEEP_EVERY: u32 = 32_768;
+
+    /// Feed one P2P message to the request/reply tracker and record what it
+    /// says about the peer.
+    fn observe_exchange(&mut self, timestamp: u64, message: &MessageEvent) {
+        let meta = &message.meta;
+        let observed = self.exchange_tracker.observe(
+            meta.peer_id,
+            &meta.command,
+            meta.inbound,
+            timestamp,
+            0, // positions are for the sequence diagram; nothing here needs one
+        );
+
+        if let Some(index) = observed.opened {
+            if let Some(stats) = self.exchanges.get_mut(index) {
+                stats.opened += 1;
+            }
+        }
+        if let Some(answered) = observed.answered {
+            if observed.first_reply {
+                if let Some(stats) = self.exchanges.get_mut(answered.exchange) {
+                    stats.answered += 1;
+                }
+            }
+            // Whose latency this is depends on who replied. A message coming in
+            // answers a request that went out, so it measures the peer; one
+            // going out measures this node.
+            let side = if meta.inbound {
+                self.peers
+                    .record_reply(meta.peer_id, timestamp, answered.elapsed_ms);
+                &mut self.reply_latency
+            } else {
+                &mut self.our_reply_latency
+            };
+            if let Some(slot) = side.get_mut(answered.exchange) {
+                slot.add(answered.elapsed_ms);
+            }
+        }
+        if let Some(unanswered) = observed.displaced {
+            self.note_unanswered(
+                meta.peer_id,
+                unanswered.exchange,
+                unanswered.request_inbound,
+            );
+        }
+
+        self.since_sweep += 1;
+        if self.since_sweep >= Self::SWEEP_EVERY {
+            self.since_sweep = 0;
+            self.sweep_exchanges(timestamp);
+        }
+    }
+
+    /// Retire requests that have waited past their window.
+    fn sweep_exchanges(&mut self, now: u64) {
+        // Collected first: the sweep borrows the tracker, and recording borrows
+        // the peer table on the same struct.
+        let mut retired = Vec::new();
+        self.exchange_tracker.sweep(now, |peer_id, unanswered| {
+            retired.push((peer_id, unanswered))
+        });
+        for (peer_id, unanswered) in retired {
+            self.note_unanswered(peer_id, unanswered.exchange, unanswered.request_inbound);
+        }
+    }
+
+    fn note_unanswered(&mut self, peer_id: u64, exchange: usize, request_was_inbound: bool) {
+        if let Some(stats) = self.exchanges.get_mut(exchange) {
+            stats.unanswered += 1;
+        }
+        // The request went out from here, so the silence is the peer's.
+        if !request_was_inbound {
+            self.peers.record_unanswered(peer_id);
+        }
     }
 }
 
@@ -278,19 +417,25 @@ impl Ingest<'_> {
         let Some(PeerObserverEvent::EbpfExtractor(ebpf)) = &event.peer_observer_event else {
             return (NO_PEER, 0, 0);
         };
-        let peers = &mut self.analysis.peers;
         match &ebpf.ebpf_event {
             Some(EbpfEvent::Message(message)) => {
-                peers.record_message(timestamp, message, kind);
+                let analysis = &mut *self.analysis;
+                analysis.peers.record_message(timestamp, message, kind);
+                analysis.relay.record(timestamp, message);
+                analysis.observe_exchange(timestamp, message);
                 let meta = &message.meta;
                 let mut event_flags = flags::HAS_DIRECTION;
                 if meta.inbound {
                     event_flags |= flags::INBOUND;
                 }
-                let index = peers.get(meta.peer_id).map_or(NO_PEER, |p| p.index);
+                let index = analysis
+                    .peers
+                    .get(meta.peer_id)
+                    .map_or(NO_PEER, |p| p.index);
                 (index, event_flags, meta.size.min(u32::MAX as u64) as u32)
             }
             Some(EbpfEvent::Connection(connection)) => {
+                let peers = &mut self.analysis.peers;
                 peers.record_connection(timestamp, connection);
                 let peer_id = connection_peer_id(connection);
                 let index = peer_id

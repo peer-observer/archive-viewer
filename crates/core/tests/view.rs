@@ -495,3 +495,206 @@ fn sequence_ties_are_positions_within_the_page() {
         assert!(tie["request"].as_u64().unwrap() < tie["reply"].as_u64().unwrap());
     }
 }
+
+/// A short transaction-relay conversation: two peers race to announce two
+/// transactions, and both deliver one of them.
+fn relay_archive() -> Analysis {
+    let events = vec![
+        // Peer 3 announces tx A first; peer 4 is 250 ms behind.
+        inv_event(1_000, 3, &[0xA1]),
+        inv_event(1_250, 4, &[0xA1]),
+        // Peer 4 gets tx B in first.
+        inv_event(1_400, 4, &[0xB2]),
+        inv_event(1_900, 3, &[0xB2]),
+        // We ask peer 3 for A and it delivers.
+        message_event(2_000, 3, "getdata", false, 37),
+        tx_event(2_100, 3, 0xA1, 400),
+        // Peer 4 sends A too: bytes we already had.
+        tx_event(2_500, 4, 0xA1, 400),
+        // A ping that is answered, and one that never is.
+        message_event(3_000, 3, "ping", false, 32),
+        message_event(3_120, 3, "pong", true, 32),
+        message_event(4_000, 4, "ping", false, 32),
+        // The archive has to outlast the ping window, or that last ping is
+        // still in flight when the stream ends rather than unanswered.
+        message_event(4_000 + 21 * 60 * 1_000, 3, "feefilter", false, 32),
+    ];
+    let stream = record_stream(&header(1_700_000_000, Some(false)), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("relay.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+    analysis
+}
+
+#[test]
+fn relay_reports_the_announcement_race_and_what_duplicates_cost() {
+    let analysis = relay_archive();
+    let relay = view::relay(&analysis, "first", true, 10);
+
+    assert_eq!(relay["items"], 2, "two transactions");
+    assert_eq!(relay["announcements"], 4);
+    assert_eq!(relay["lateAnnouncements"], 2);
+    assert_eq!(relay["deliveries"], 2);
+    assert_eq!(relay["duplicateDeliveries"], 1);
+    assert_eq!(relay["duplicateBytes"], 400);
+    assert_eq!(relay["duplicateFactor"], 2.0);
+    assert_eq!(relay["capped"], false);
+
+    // Each peer won one race, so both have a 50% win ratio.
+    let rows = relay["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["first"], 1);
+        assert_eq!(row["late"], 1);
+        assert_eq!(row["winRatio"], 0.5);
+        assert!(row["addr"].is_string(), "the scorecard names the peer");
+    }
+
+    // Only peer 4 sent a transaction we already had.
+    let by_id = |id: u64| rows.iter().find(|r| r["peerId"] == id).unwrap();
+    assert_eq!(by_id(3)["duplicateBytes"], 0);
+    assert_eq!(by_id(4)["duplicateBytes"], 400);
+    assert_eq!(by_id(4)["duplicate"], 1);
+}
+
+#[test]
+fn the_relay_scorecard_sorts_by_the_column_asked_for() {
+    let analysis = relay_archive();
+    let by_duplicates = view::relay(&analysis, "duplicateBytes", true, 10);
+    assert_eq!(by_duplicates["rows"][0]["peerId"], 4);
+
+    let ascending = view::relay(&analysis, "duplicateBytes", false, 10);
+    assert_eq!(ascending["rows"][0]["peerId"], 3);
+
+    // A limit truncates the listing but not the totals.
+    let one = view::relay(&analysis, "first", true, 1);
+    assert_eq!(one["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(one["peers"], 2);
+}
+
+#[test]
+fn exchanges_report_what_each_request_kind_got_back() {
+    let analysis = relay_archive();
+    let rows = view::exchanges(&analysis);
+    let rows = rows["rows"].as_array().unwrap();
+    let find = |name: &str| rows.iter().find(|r| r["request"] == name);
+
+    let ping = find("ping").expect("pings were sent");
+    assert_eq!(ping["opened"], 2);
+    assert_eq!(ping["answered"], 1);
+    assert_eq!(ping["unanswered"], 1, "peer 4 never answered");
+    assert_eq!(ping["undetermined"], 0);
+    assert_eq!(ping["optional"], false);
+    assert_eq!(ping["peerLatency"]["count"], 1);
+    assert_eq!(ping["peerLatency"]["maxMs"], 120);
+
+    // An announcement is never counted as a failure to answer.
+    let inv = find("inv").expect("invs were sent");
+    assert_eq!(inv["optional"], true);
+    assert_eq!(inv["unanswered"], 0);
+
+    // Every reported exchange names the commands that answer it.
+    for row in rows {
+        assert!(!row["replies"].as_array().unwrap().is_empty());
+        assert!(row["opened"].as_u64().unwrap() > 0);
+    }
+}
+
+#[test]
+fn peer_detail_carries_the_relay_record_and_reply_distribution() {
+    let analysis = relay_archive();
+
+    let three = view::peer_detail(&analysis, 3);
+    assert_eq!(three["unanswered"], 0);
+    assert_eq!(three["replies"]["count"], 2, "a pong and a transaction");
+    assert_eq!(three["relay"]["first"], 1);
+    // The bucket edges travel with the counts, so the page need not know them.
+    let edges = three["replies"]["edges"].as_array().unwrap();
+    assert_eq!(
+        edges.len(),
+        three["replies"]["buckets"].as_array().unwrap().len()
+    );
+    assert_eq!(edges[0]["lowMs"], 0);
+    assert!(
+        edges.last().unwrap()["highMs"].is_null(),
+        "the last bucket is open-ended"
+    );
+
+    let four = view::peer_detail(&analysis, 4);
+    assert_eq!(four["unanswered"], 1, "its ping was never answered");
+
+    // A peer that never relayed anything says so rather than inventing zeroes.
+    let events = vec![message_event(1_000, 9, "addrv2", true, 60)];
+    let stream = record_stream(&header(1, None), &events);
+    let mut quiet = Analysis::new(BUDGET);
+    quiet.begin_file("q.bin".to_string(), stream.len() as u64);
+    quiet.push(&stream).expect("push");
+    quiet.end_file();
+    let detail = view::peer_detail(&quiet, 9);
+    assert!(detail["relay"].is_null());
+    assert_eq!(detail["replies"]["count"], 0);
+}
+
+#[test]
+fn silence_says_nothing_when_the_reply_was_never_captured() {
+    // What an archive captured with a message filter looks like: `version` was
+    // recorded, `verack` was not. Every handshake then appears unanswered, and
+    // reporting that as peers failing to answer would be plainly wrong.
+    let mut events = Vec::new();
+    for i in 0..20u64 {
+        events.push(message_event(1_000 + i * 10, i, "version", false, 102));
+    }
+    // Long enough after for the handshake window to have passed.
+    events.push(message_event(
+        1_000 + 5 * 60 * 1_000,
+        99,
+        "addrv2",
+        true,
+        60,
+    ));
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("filtered.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let page = view::exchanges(&analysis);
+    let version = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == "version")
+        .expect("versions were sent");
+    assert_eq!(version["opened"], 20);
+    assert!(
+        version["unanswered"].as_u64().unwrap() > 0,
+        "they do look unanswered"
+    );
+    assert_eq!(
+        version["repliesCaptured"], false,
+        "but no verack appears anywhere in the archive"
+    );
+    assert_eq!(page["unansweredMeaningful"], false);
+    assert_eq!(
+        view::peer_detail(&analysis, 0)["unansweredMeaningful"],
+        false
+    );
+
+    // The same archive with veracks in it is trustworthy again.
+    events.insert(1, message_event(1_005, 0, "verack", true, 24));
+    let stream = record_stream(&header(1, None), &events);
+    let mut answered = Analysis::new(BUDGET);
+    answered.begin_file("full.bin".to_string(), stream.len() as u64);
+    answered.push(&stream).expect("push");
+    answered.end_file();
+    let page = view::exchanges(&answered);
+    let version = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == "version")
+        .unwrap();
+    assert_eq!(version["repliesCaptured"], true);
+    assert_eq!(page["unansweredMeaningful"], true);
+}

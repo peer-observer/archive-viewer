@@ -158,3 +158,52 @@ pub fn transaction_event(ts: u64, peer_id: u64, raw_len: usize) -> Event {
         )),
     }
 }
+
+/// An inbound `inv` announcing transactions, by wtxid.
+pub fn inv_event(ts: u64, peer_id: u64, hashes: &[u8]) -> Event {
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::{inventory_item::Item, InventoryItem},
+        ebpf_extractor::message::Inv,
+    };
+    let mut event = message_event(ts, peer_id, "inv", true, 37 * hashes.len() as u64);
+    set_msg(
+        &mut event,
+        message_event::Msg::Inv(Inv {
+            items: hashes
+                .iter()
+                .map(|seed| InventoryItem {
+                    item: Some(Item::Wtx(vec![*seed; 32])),
+                })
+                .collect(),
+        }),
+    );
+    event
+}
+
+/// An inbound `tx` delivering one transaction.
+pub fn tx_event(ts: u64, peer_id: u64, seed: u8, size: u64) -> Event {
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::Transaction, ebpf_extractor::message::Tx,
+    };
+    let mut event = message_event(ts, peer_id, "tx", true, size);
+    set_msg(
+        &mut event,
+        message_event::Msg::Tx(Tx {
+            tx: Transaction {
+                txid: vec![seed; 32],
+                wtxid: vec![seed; 32],
+                raw: None,
+            },
+        }),
+    );
+    event
+}
+
+/// Replace the payload of a message event built by [`message_event`].
+fn set_msg(event: &mut Event, msg: message_event::Msg) {
+    if let Some(event::PeerObserverEvent::EbpfExtractor(ebpf)) = &mut event.peer_observer_event {
+        if let Some(ebpf_extractor::ebpf::EbpfEvent::Message(message)) = &mut ebpf.ebpf_event {
+            message.msg = Some(msg);
+        }
+    }
+}

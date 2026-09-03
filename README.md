@@ -90,6 +90,52 @@ where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
 `cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
 a page boundary is not drawn. The toggle in the toolbar turns them off.
 
+**Relay** — the question an archive can answer that a running node cannot be
+asked after the fact: for every transaction, which peer announced it first, how
+far behind the others were, and how many bytes went on receiving something the
+node already had. Per peer that is a scorecard — first-to-announce count against
+duplicate bytes contributed — which is the evidence for whether a peer is
+earning its connection slot. Beside it, how each kind of request fared: how many
+were sent, how many were answered, how many went unanswered, and how long the
+answers took.
+
+On a 1.07 GB archive of a live node:
+
+```
+transactions      40,392        1,037,820 announcements
+delivered         49,360        15,674 already held
+received twice    1.47x         3.2 MB spent again
+median lag        5.3 s         behind the winner
+```
+
+That 5.3 s is Bitcoin Core's own announcement scheduling showing up in the data:
+inventory is broadcast to inbound peers on a Poisson timer averaging five
+seconds, so most of what a peer "loses" a race by is not the network.
+
+### What the request/reply numbers do and do not mean
+
+Requests are paired with replies by command, direction and timing. The archive
+records no txids, block hashes or ping nonces, so a pairing is the nearest
+matching unanswered request rather than a proven one, and three things follow
+that the views state rather than paper over:
+
+- **An announcement is not a request.** A node asks for a fraction of what it is
+  told about, so an `inv` with no `getdata` after it is a choice, not a failure.
+  Announcements are never counted as unanswered.
+- **Pipelining makes silence unreadable.** Core keeps several `getdata` in
+  flight; a later one says nothing about an earlier one. Those requests are
+  reported as *unclear* rather than being guessed at either way.
+- **A reply type that was never captured is not a peer going silent.** An
+  archive holding `version` but no `verack` makes every handshake look
+  unanswered. Since the header records the capture filter only as far as
+  `low_data`, the viewer checks whether the answering command appears anywhere
+  in the archive at all, and shows *not captured* instead of a number that would
+  certainly be wrong.
+
+Tracking is bounded: two million distinct transaction hashes, after which the
+view says tracking stopped and the figures cover the part of the archive it
+reached.
+
 ### The ASN database
 
 The networks view needs two things the rest of the page does not:

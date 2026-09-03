@@ -117,13 +117,25 @@ main { padding: 12px; }
 .p > .body { padding: 10px; }
 
 /* Compact key/value strip, in place of a grid of big number cards. */
-#stats { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 12px;
+.kvbar { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 12px;
          border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); }
-#stats .kv { padding: 7px 14px; border-right: 1px solid var(--rule); }
-#stats .kv:last-child { border-right: none; }
-#stats .k { color: var(--ink-3); font-size: 11.5px; }
-#stats .v { font-family: var(--mono); font-size: 15px; margin-top: 1px; }
-#stats .v small { font-family: var(--sans); font-size: 11.5px; color: var(--ink-3); margin-left: 4px; }
+.kvbar .kv { padding: 7px 14px; border-right: 1px solid var(--rule); }
+.kvbar .kv:last-child { border-right: none; }
+.kvbar .k { color: var(--ink-3); font-size: 11.5px; }
+.kvbar .v { font-family: var(--mono); font-size: 15px; margin-top: 1px; }
+.kvbar .v small { font-family: var(--sans); font-size: 11.5px; color: var(--ink-3); margin-left: 4px; }
+
+/* Latency distribution: one bar per power-of-two millisecond bucket. Bars are
+   thin with a 2px surface gap, and the axis names only the ends and middle --
+   twenty labels would be unreadable and nobody reads a bucket edge anyway. */
+.dist { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin: 8px 0 3px; }
+.dist i { flex: 1 1 0; min-width: 0; min-height: 1px; background: var(--s1);
+          border-radius: 2px 2px 0 0; }
+.dist i.none { background: var(--rule); }
+.distfoot { display: flex; justify-content: space-between; color: var(--ink-3);
+            font-size: 10px; font-family: var(--mono); }
+.disthead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.disthead b { font-weight: 600; }
 
 .msg { padding: 6px 10px; border-left: 2px solid var(--warn); background: var(--panel);
        border-top: 1px solid var(--rule); border-right: 1px solid var(--rule);
@@ -203,7 +215,7 @@ canvas { display: block; width: 100%; }
 .seg button + button { border-left: 1px solid var(--rule-2); }
 .seg button.on { background: var(--accent); color: #fff; }
 
-/* ------------------------------------------------------ sequence diagram */
+/* ------------------------------------------------------- sequence diagram */
 #seq { display: block; font-family: var(--mono); }
 #seq .life { stroke: var(--rule); stroke-width: 1; }
 #seq .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
@@ -266,6 +278,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
   <button data-tab="peers" aria-selected="false">Peers</button>
   <button data-tab="events" aria-selected="false">Events</button>
   <button data-tab="sequence" aria-selected="false">Sequence</button>
+  <button data-tab="relay" aria-selected="false">Relay</button>
 </div>
 
 <main>
@@ -293,7 +306,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <!-- ------------------------------------------------------- overview -->
     <div id="tab-overview">
       <div id="notes"></div>
-      <div id="stats"></div>
+      <div id="stats" class="kvbar"></div>
 
       <div class="p" style="margin-bottom:12px">
         <div class="h"><span>All events over time</span><span class="sp"></span>
@@ -381,6 +394,37 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <div class="p" id="insp">
           <div class="h"><span>Event</span></div>
           <div class="body dim">Select an event to decode it in full.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------------------------------------------------- relay -->
+    <div id="tab-relay" hidden>
+      <div id="rnote"></div>
+      <div id="rstats" class="kvbar"></div>
+      <div class="cols c2" style="margin-bottom:12px">
+        <div class="p">
+          <div class="h"><span>How far behind the losers were</span><span class="sp"></span>
+            <span class="dim">announcement lag</span></div>
+          <div class="body" id="rlag"></div>
+        </div>
+        <div class="p">
+          <div class="h"><span>From first hearing to holding it</span><span class="sp"></span>
+            <span class="dim">announcement to delivery</span></div>
+          <div class="body" id="rheld"></div>
+        </div>
+      </div>
+      <div class="side">
+        <div class="p">
+          <div class="h"><span>Peer scorecard</span>
+            <input type="search" id="rsearch" placeholder="address or peer id">
+            <span class="sp"></span><span class="dim" id="rcount"></span></div>
+          <div class="scroll" style="max-height:calc(100vh - 420px)"><table id="trelay"></table></div>
+        </div>
+        <div class="p">
+          <div class="h"><span>Requests and replies</span></div>
+          <div class="scroll" style="max-height:calc(100vh - 420px)"><table id="texch"></table></div>
+          <div class="body dim" id="rexchnote"></div>
         </div>
       </div>
     </div>
@@ -501,6 +545,7 @@ const S = {
   peerMode: 'peers',                // 'peers' or 'networks'
   netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
   seqPeers: [], seqOffset: 0, seqSelected: null,
+  relayRows: [], relaySort: { key: "first", desc: true },
   tab: 'overview',
 };
 
@@ -570,6 +615,7 @@ async function loadFiles(list) {
   S.hidden.tl.clear(); S.hidden.tl2.clear();
   S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
   S.seqPeers = []; S.seqOffset = 0; S.seqSelected = null;
+  S.relayRows = []; S.relaySort = { key: "first", desc: true };
   S.filter = { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' };
 
   const total = files.reduce((sum, f) => sum + f.size, 0);
@@ -1152,6 +1198,45 @@ function selectPeer(peerId) {
     panel.append(wrap(table));
   }
 
+  if (d.replies.count || (d.unanswered && d.unansweredMeaningful)) {
+    panel.append(sub('How it answered'));
+    const body = el('div', 'body');
+    // One distribution across every kind of request, because keeping one per
+    // request kind for every peer is not affordable. The Relay tab breaks the
+    // same measurements down by request kind, across all peers.
+    distribution(body, d.replies, 'It never answered a request.');
+    if (d.unanswered && d.unansweredMeaningful) {
+      const line = el('div', 'dim');
+      line.style.marginTop = '6px';
+      line.textContent = `${num(d.unanswered)} request${d.unanswered === 1 ? '' : 's'} `
+        + 'went unanswered past the point of waiting.';
+      body.append(line);
+    }
+    panel.append(body);
+  }
+
+  if (d.relay) {
+    panel.append(sub('Transaction relay'));
+    const table = el('table');
+    const tbody = el('tbody');
+    const rows = [
+      ['first to announce', `${num(d.relay.first)} of ${num(d.relay.first + d.relay.late)}`
+        + (d.relay.winRatio == null ? '' : ` (${(d.relay.winRatio * 100).toFixed(1)}%)`)],
+      ['median lag when behind', d.relay.lagP50Ms == null ? '—' : dur(d.relay.lagP50Ms)],
+      ['transactions delivered', num(d.relay.delivered)],
+      ['already held', d.relay.duplicate
+        ? `${num(d.relay.duplicate)}, ${bytes(d.relay.duplicateBytes)} wasted`
+        : 'none'],
+    ];
+    for (const [k, v] of rows) {
+      const tr = el('tr');
+      tr.append(td(k, 'dim'), td(v, 'm'));
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    panel.append(wrap(table));
+  }
+
   if (d.lifecycle.length) {
     const shown = d.lifecycleTotal > d.lifecycle.length
       ? `Connection lifecycle (last ${d.lifecycle.length} of ${num(d.lifecycleTotal)})`
@@ -1560,6 +1645,234 @@ function jsonNodes(value, depth) {
   return [el('span', 'n', String(value))];
 }
 
+/* ------------------------------------------------------------------ relay */
+
+/**
+ * Draw a latency distribution: one bar per power-of-two millisecond bucket.
+ *
+ * The bucket edges arrive with the counts, so this never has to know how the
+ * histogram is laid out. Empty buckets at either end are trimmed -- twenty
+ * buckets span sub-millisecond to nine minutes, and a real distribution
+ * occupies a handful of them.
+ */
+function distribution(box, l, empty) {
+  box.replaceChildren();
+  if (!l || !l.count) {
+    box.append(el('div', 'dim', empty));
+    return;
+  }
+
+  const head = el('div', 'disthead');
+  head.append(el('b', null, `${num(l.count)} replies`));
+  for (const [label, value] of [['median', l.p50Ms], ['p90', l.p90Ms], ['p99', l.p99Ms],
+                                ['slowest', l.maxMs]]) {
+    if (value == null) continue;
+    head.append(el('span', 'dim', `${label} ${dur(value)}`));
+  }
+  box.append(head);
+
+  const first = l.buckets.findIndex((n) => n > 0);
+  const last = l.buckets.length - 1 - [...l.buckets].reverse().findIndex((n) => n > 0);
+  const peak = Math.max(...l.buckets);
+  const chart = el('div', 'dist');
+  for (let i = first; i <= last; i++) {
+    const n = l.buckets[i];
+    const bar = el('i', n ? null : 'none');
+    bar.style.height = `${n ? Math.max(2, (n / peak) * 100) : 1}%`;
+    const { lowMs, highMs } = l.edges[i];
+    const range = highMs == null ? `${dur(lowMs)} and slower` : `${dur(lowMs)} to ${dur(highMs)}`;
+    bar.title = `${range}: ${num(n)}`;
+    chart.append(bar);
+  }
+  box.append(chart);
+
+  const foot = el('div', 'distfoot');
+  foot.append(el('span', null, dur(l.edges[first].lowMs)),
+              el('span', null, dur(l.edges[last].lowMs) + (l.edges[last].highMs == null ? '+' : '')));
+  box.append(foot);
+}
+
+function renderRelay() {
+  if (!S.session || S.dead) return;
+  const page = callJson('relay', S.relaySort.key, S.relaySort.desc, 2000);
+  if (!page) return;
+  S.relayRows = page.rows;
+
+  const box = $("rnote");
+  box.replaceChildren();
+  if (!page.announcements && !page.deliveries) {
+    box.append(note('No transaction relay in this archive.',
+      'This view is built from inbound inv and tx messages. An archive captured without ' +
+      '--messages, or with only connection events, has none.'));
+    $('rstats').replaceChildren();
+    $('trelay').replaceChildren();
+    $('texch').replaceChildren();
+    distribution($('rlag'), null, 'Nothing announced.');
+    distribution($('rheld'), null, 'Nothing delivered.');
+    renderExchanges();
+    return;
+  }
+  if (page.capped) {
+    box.append(note('Transaction tracking stopped early.',
+      `The archive announced more than ${num(page.maxItems)} distinct transactions, which is as ` +
+      `many as this keeps. ${num(page.untracked)} later announcements were not counted; ` +
+      'everything up to that point is exact.'));
+  }
+
+  const factor = page.duplicateFactor;
+  const wasted = page.deliveries ? page.duplicateBytes : 0;
+  $('rstats').replaceChildren(...[
+    ['transactions', num(page.items), `${num(page.announcements)} announcements`],
+    ['heard from', `${num(page.peers)}`, 'peers'],
+    ['delivered', num(page.deliveries),
+      page.duplicateDeliveries ? `${num(page.duplicateDeliveries)} already held` : 'no duplicates'],
+    ['received twice over', factor == null ? '—' : `${factor.toFixed(2)}×`,
+      wasted ? `${bytes(wasted)} spent again` : ''],
+    ['median lag', page.lag.p50Ms == null ? '—' : dur(page.lag.p50Ms), 'behind the winner'],
+  ].map(([k, v, extra]) => {
+    const kv = el('div', 'kv');
+    kv.append(el('div', 'k', k));
+    const value = el('div', 'v', v);
+    if (extra) value.append(el('small', null, extra));
+    kv.append(value);
+    return kv;
+  }));
+
+  distribution($('rlag'), page.lag, 'Every announcement was the first one.');
+  distribution($('rheld'), page.heardToHeld, 'Nothing was both announced and delivered.');
+  paintRelay();
+  renderExchanges();
+}
+
+function paintRelay() {
+  const needle = $('rsearch').value.trim().toLowerCase();
+  const rows = needle
+    ? S.relayRows.filter((p) => String(p.peerId).includes(needle) ||
+        (p.addr ?? '').toLowerCase().includes(needle))
+    : S.relayRows;
+  $('rcount').textContent = `${num(rows.length)} peers`;
+
+  // `first` and `late` are counts, so a long-lived peer wins on volume alone;
+  // the win rate beside them is what makes two peers comparable.
+  const cols = [['peerId', 'peer', 0], ['addr', 'address', 0], ['first', 'first', 1],
+                ['win', 'win rate', 1], ['late', 'behind', 1], ['lag', 'median lag', 1],
+                ['delivered', 'delivered', 1], ['duplicate', 'dupes', 1],
+                ['duplicateBytes', 'wasted', 1]];
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [key, label, isNum] of cols) {
+    const sortable = key !== 'peerId' && key !== 'addr';
+    const th = el('th', `${sortable ? 's' : ''}${isNum ? ' n' : ''}`);
+    th.textContent = label + (S.relaySort.key === key ? (S.relaySort.desc ? ' ↓' : ' ↑') : '');
+    if (sortable) {
+      th.addEventListener('click', () => {
+        if (S.relaySort.key === key) S.relaySort.desc = !S.relaySort.desc;
+        else S.relaySort = { key, desc: true };
+        renderRelay();
+      });
+    }
+    hr.append(th);
+  }
+  thead.append(hr);
+
+  const tbody = el('tbody');
+  for (const p of rows.slice(0, 3000)) {
+    const tr = el('tr', S.peer === p.peerId ? 'on' : null);
+    tr.append(
+      td(String(p.peerId), 'n'),
+      td(p.addr ?? 'not seen', 'm'),
+      td(num(p.first), 'n'),
+      td(p.winRatio == null ? '—' : `${(p.winRatio * 100).toFixed(1)}%`, 'n'),
+      td(num(p.late), 'n'),
+      td(p.lagP50Ms == null ? '—' : dur(p.lagP50Ms), 'n'),
+      td(num(p.delivered), 'n'),
+      td(num(p.duplicate), 'n'),
+      td(p.duplicateBytes ? bytes(p.duplicateBytes) : '—', 'n'),
+    );
+    tr.addEventListener('click', () => { showTab('peers'); selectPeer(p.peerId); });
+    tbody.append(tr);
+  }
+  $('trelay').replaceChildren(thead, tbody);
+}
+
+/**
+ * How each kind of request fared.
+ *
+ * `sent` is exact. Of the rest, "answered" and "timed out" are what could be
+ * established; the remainder could not be, and the table says so rather than
+ * folding it into either column.
+ */
+function renderExchanges() {
+  const page = callJson('exchanges');
+  if (!page) return;
+  const table = $('texch');
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [l, c] of [['request', 'm'], ['sent', 'n'], ['answered', 'n'],
+                        ['no reply', 'n'], ['unclear', 'n'], ['median', 'n']]) {
+    hr.append(el('th', c, l));
+  }
+  thead.append(hr);
+
+  const tbody = el("tbody");
+  let optional = false;
+  const uncaptured = [];
+  for (const r of page.rows) {
+    const tr = el('tr');
+    const name = el('td', 'm');
+    name.textContent = r.request;
+    name.title = `answered by ${r.replies.join(', ')}`;
+    const noReply = el('td', 'n');
+    if (r.optional) {
+      // Not asking for what was announced is a choice, not a failure, so there
+      // is no such thing as an unanswered one.
+      optional = true;
+      noReply.textContent = 'n/a';
+      noReply.className = 'n dim';
+      noReply.title = 'an announcement this node chose not to act on is not a failed request';
+    } else if (!r.repliesCaptured) {
+      // The reply message type is absent from the whole archive, so every one
+      // of these looks unanswered. That is the capture filter, not the peers.
+      uncaptured.push(`${r.request} (needs ${r.replies.join(' or ')})`);
+      noReply.textContent = 'not captured';
+      noReply.className = 'n dim';
+      noReply.title = `no ${r.replies.join(' or ')} message appears anywhere in this archive, `
+        + 'so nothing here could have been answered';
+    } else {
+      noReply.textContent = num(r.unanswered);
+    }
+    const median = el('td', 'n');
+    median.textContent = r.peerLatency.p50Ms == null ? '—' : dur(r.peerLatency.p50Ms);
+    median.title = r.ourLatency.p50Ms == null
+      ? 'how long peers took to answer'
+      : `peers ${dur(r.peerLatency.p50Ms ?? 0)}; this node ${dur(r.ourLatency.p50Ms)}`;
+    tr.append(name, td(num(r.opened), 'n'), td(num(r.answered), 'n'), noReply,
+              td(num(r.undetermined), 'n'), median);
+    tbody.append(tr);
+  }
+  table.replaceChildren(thead, tbody);
+
+  const foot = $('rexchnote');
+  foot.replaceChildren();
+  const lines = [
+    'Requests are paired with replies by command, direction and timing — the archive records ' +
+    'no txids or ping nonces. “Unclear” is requests whose fate could not be established, which ' +
+    'is where Bitcoin Core keeps several in flight at once and a later one says nothing about ' +
+    'an earlier one.',
+  ];
+  if (uncaptured.length) {
+    lines.unshift('This archive does not contain the messages that would answer '
+      + `${uncaptured.join(', ')}. The producing run captured only some message types, and the `
+      + 'header does not record which, so those requests only look unanswered.');
+  }
+  if (optional) {
+    lines.push('An announcement (inv, cmpctblock) is not a request: this node acts on a fraction ' +
+      'of what it is told about, so those are never counted as unanswered.');
+  }
+  for (const line of lines) foot.append(el('div', null, line));
+  foot.style.whiteSpace = 'normal';
+}
+
 /* ------------------------------------------------------- sequence diagram */
 
 const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24, tie: 9, tieDepth: 6 };
@@ -1934,12 +2247,13 @@ function showTab(name) {
   for (const b of document.querySelectorAll('#tabs button')) {
     b.setAttribute('aria-selected', String(b.dataset.tab === name));
   }
-  for (const t of ['overview', 'peers', 'events', 'sequence']) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["overview", "peers", "events", "sequence", "relay"]) $(`tab-${t}`).hidden = t !== name;
   // Canvas and SVG have no size while hidden, so they are drawn on reveal.
   if (!S.session || S.dead) return;
   if (name === 'overview') drawBoth();
   if (name === 'events') refreshEvents();
   if (name === 'sequence') { buildSeqPicker(); drawSequence(); }
+  if (name === "relay") renderRelay();
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -2024,6 +2338,7 @@ function setup() {
   });
   $('seq-limit').addEventListener('change', () => { S.seqOffset = 0; drawSequence(); });
   $("seq-ties").addEventListener("change", drawSequence);
+  $("rsearch").addEventListener("input", paintRelay);
 
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);

@@ -6,10 +6,12 @@
 
 use crate::analysis::Analysis;
 use crate::asn;
-use crate::exchange::{match_turns, Turn};
-use crate::kind::GROUPS;
+use crate::exchange::{self, match_turns, Turn};
+use crate::kind::{Group, GROUPS};
+use crate::latency::{self, Latencies};
 use crate::peers::{LifecycleKind, PeerStats};
 use crate::proto::bitcoin_primitives::ConnType;
+use crate::relay;
 use crate::store::NO_PEER;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -341,6 +343,29 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         object.insert("lifecycle".into(), Value::Array(lifecycle));
         object.insert("lifecycleTotal".into(), json!(peer.lifecycle_total));
         object.insert("lifecycleCap".into(), json!(crate::peers::LIFECYCLE_CAP));
+        // How this peer answered, and what it failed to answer. The
+        // distribution mixes every kind of request, because keeping one per
+        // exchange for every peer is not affordable; `view::exchanges` breaks
+        // the same measurements down by request kind across all peers.
+        object.insert(
+            "replies".into(),
+            peer.replies
+                .as_deref()
+                .map_or_else(|| latencies(&Latencies::default()), latencies),
+        );
+        object.insert("unanswered".into(), json!(peer.unanswered));
+        object.insert(
+            "unansweredMeaningful".into(),
+            json!(unanswered_is_meaningful(analysis)),
+        );
+        object.insert(
+            "relay".into(),
+            analysis
+                .relay
+                .peer(peer_id)
+                .filter(|r| !r.is_empty())
+                .map_or(Value::Null, |r| relay_row(analysis, peer_id, r)),
+        );
     }
     row
 }
@@ -491,6 +516,164 @@ fn matches_text(analysis: &Analysis, row: usize, needle: &str) -> bool {
         }
     }
     false
+}
+
+/// Serialise a latency distribution for the UI.
+fn latencies(l: &Latencies) -> Value {
+    json!({
+        "count": l.count(),
+        "minMs": l.min_ms(),
+        "maxMs": l.max_ms(),
+        "meanMs": l.mean_ms(),
+        "p50Ms": l.percentile_ms(0.5),
+        "p90Ms": l.percentile_ms(0.9),
+        "p99Ms": l.percentile_ms(0.99),
+        "buckets": l.buckets(),
+        // Bucket edges travel with the counts so the page never has to know how
+        // the buckets are laid out.
+        "edges": (0..latency::BUCKETS)
+            .map(|i| {
+                let (low, high) = latency::bucket_range(i);
+                json!({ "lowMs": low, "highMs": high })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// One peer's line in the relay scorecard.
+fn relay_row(analysis: &Analysis, peer_id: u64, record: &relay::PeerRelay) -> Value {
+    let peer = analysis.peers.get(peer_id);
+    json!({
+        "peerId": peer_id,
+        "addr": peer.and_then(|p| p.addr.clone()),
+        "connType": peer.and_then(|p| p.conn_type).map(conn_type_name),
+        "first": record.first,
+        "late": record.late,
+        "winRatio": record.win_ratio(),
+        "lagP50Ms": record.lag.percentile_ms(0.5),
+        "lagP90Ms": record.lag.percentile_ms(0.9),
+        "delivered": record.delivered,
+        "duplicate": record.duplicate,
+        "duplicateBytes": record.duplicate_bytes,
+        "heardToHeldP50Ms": record.heard_to_held.percentile_ms(0.5),
+    })
+}
+
+/// Transaction relay: who announced what first, and what the duplicates cost.
+///
+/// `sort` picks the column: `first`, `late`, `win`, `lag`, `delivered` or
+/// `duplicateBytes`.
+pub fn relay(analysis: &Analysis, sort: &str, descending: bool, limit: usize) -> Value {
+    let relay = &analysis.relay;
+    let mut rows: Vec<(u64, &relay::PeerRelay)> =
+        relay.peers().filter(|(_, r)| !r.is_empty()).collect();
+    rows.sort_by(|a, b| {
+        let key = |r: &relay::PeerRelay| -> f64 {
+            match sort {
+                "late" => r.late as f64,
+                "win" => r.win_ratio().unwrap_or(-1.0),
+                "lag" => r.lag.percentile_ms(0.5).unwrap_or(0) as f64,
+                "delivered" => r.delivered as f64,
+                "duplicate" => r.duplicate as f64,
+                "duplicateBytes" => r.duplicate_bytes as f64,
+                _ => r.first as f64,
+            }
+        };
+        let ordering = key(a.1)
+            .partial_cmp(&key(b.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            // Ties broken by peer id so paging is stable.
+            .then(b.0.cmp(&a.0));
+        if descending {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    });
+
+    let totals = relay.totals();
+    let listed: Vec<Value> = rows
+        .iter()
+        .take(limit)
+        .map(|(id, record)| relay_row(analysis, *id, record))
+        .collect();
+
+    json!({
+        "peers": rows.len(),
+        "rows": listed,
+        "items": relay.items(),
+        "announcements": relay.announcements,
+        "lateAnnouncements": relay.late_announcements,
+        "deliveries": relay.deliveries,
+        "duplicateDeliveries": relay.duplicate_deliveries,
+        "duplicateBytes": relay.duplicate_bytes,
+        "duplicateFactor": relay.duplicate_factor(),
+        "capped": relay.capped(),
+        "untracked": relay.untracked,
+        "maxItems": relay::MAX_ITEMS,
+        "firstAnnouncers": totals.first,
+        "lag": latencies(&relay.lag),
+        "heardToHeld": latencies(&relay.heard_to_held),
+    })
+}
+
+/// Whether any command that answers this exchange appears in the archive at all.
+///
+/// The archiver records which event types a run captured only as far as the
+/// `low_data` flag; the message filter it used is not in the header. So an
+/// archive holding `version` but no `verack` is indistinguishable from a node
+/// whose every handshake failed -- except that every handshake failing is not a
+/// thing that happens. Where a reply command never appears at all, silence says
+/// nothing about the peers, and saying so beats reporting a number that is
+/// certainly wrong.
+fn replies_captured(analysis: &Analysis, index: usize) -> bool {
+    exchange::reply_names(index).iter().any(|name| {
+        analysis.kinds.iter().any(|(id, info)| {
+            info.group == Group::EbpfMessage
+                && info.name == *name
+                && analysis.counts.get(id as usize).copied().unwrap_or(0) > 0
+        })
+    })
+}
+
+/// Whether unanswered counts mean anything for this archive.
+///
+/// False when some exchange produced unanswered requests but the archive never
+/// captured the messages that would have answered them.
+pub fn unanswered_is_meaningful(analysis: &Analysis) -> bool {
+    !analysis
+        .exchanges
+        .iter()
+        .enumerate()
+        .any(|(index, stats)| stats.unanswered > 0 && !replies_captured(analysis, index))
+}
+
+/// How each kind of request fared, and how long the answers took.
+pub fn exchanges(analysis: &Analysis) -> Value {
+    let rows: Vec<Value> = analysis
+        .exchanges
+        .iter()
+        .enumerate()
+        .filter(|(_, stats)| stats.opened > 0)
+        .map(|(index, stats)| {
+            json!({
+                "request": exchange::request_name(index),
+                "replies": exchange::reply_names(index),
+                // An announcement is not a request: we act on a fraction of what
+                // is announced to us, so its remainder is a choice, not a
+                // failure, and it is never counted as unanswered.
+                "optional": exchange::is_optional(index),
+                "repliesCaptured": replies_captured(analysis, index),
+                "opened": stats.opened,
+                "answered": stats.answered,
+                "unanswered": stats.unanswered,
+                "undetermined": stats.undetermined(),
+                "peerLatency": latencies(&analysis.reply_latency[index]),
+                "ourLatency": latencies(&analysis.our_reply_latency[index]),
+            })
+        })
+        .collect();
+    json!({ "rows": rows, "unansweredMeaningful": unanswered_is_meaningful(analysis) })
 }
 
 /// A page of the raw event table.
