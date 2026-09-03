@@ -126,3 +126,35 @@ pub fn event_without_an_arm(ts: u64) -> Event {
         peer_observer_event: None,
     }
 }
+
+/// A `tx` message carrying `raw_len` bytes of raw transaction data — the shape
+/// that dominates a full-data archive.
+pub fn transaction_event(ts: u64, peer_id: u64, raw_len: usize) -> Event {
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::Transaction, ebpf_extractor::message::Tx,
+    };
+    Event {
+        timestamp: ts,
+        peer_observer_event: Some(event::PeerObserverEvent::EbpfExtractor(
+            ebpf_extractor::Ebpf {
+                ebpf_event: Some(ebpf_extractor::ebpf::EbpfEvent::Message(MessageEvent {
+                    meta: Metadata {
+                        peer_id,
+                        addr: format!("10.0.0.{}:8333", peer_id % 251),
+                        conn_type: ConnType::Inbound as i32,
+                        command: "tx".to_string(),
+                        inbound: true,
+                        size: raw_len as u64,
+                    },
+                    msg: Some(message_event::Msg::Tx(Tx {
+                        tx: Transaction {
+                            txid: vec![0x11; 32],
+                            wtxid: vec![0x22; 32],
+                            raw: Some(vec![0xAB; raw_len]),
+                        },
+                    })),
+                })),
+            },
+        )),
+    }
+}

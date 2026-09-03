@@ -10,12 +10,44 @@ use crate::proto::ebpf_extractor::{
 };
 use std::collections::HashMap;
 
+/// Kind of connection lifecycle event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleKind {
+    Inbound,
+    Outbound,
+    Closed,
+    InboundEvicted,
+    Misbehaving,
+}
+
+impl LifecycleKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LifecycleKind::Inbound => "inbound",
+            LifecycleKind::Outbound => "outbound",
+            LifecycleKind::Closed => "closed",
+            LifecycleKind::InboundEvicted => "inbound_evicted",
+            LifecycleKind::Misbehaving => "misbehaving",
+        }
+    }
+}
+
+/// How many lifecycle events to keep per peer.
+///
+/// The peer table is not covered by the event store's retention budget, so
+/// anything unbounded in it is an allocation failure waiting to happen: an
+/// archive of a churny node has millions of connection events, and a viewer that
+/// kept them all would run the browser out of memory with no budget to blame.
+/// Bitcoin Core assigns a fresh peer id per connection, so a peer id has one
+/// lifecycle -- open, perhaps some misbehaviour, close. Eight is already
+/// generous; `lifecycle_total` keeps the count honest when it is not.
+pub const LIFECYCLE_CAP: usize = 8;
+
 /// One entry in a peer's connection lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LifecycleEvent {
     pub timestamp: u64,
-    /// `inbound`, `outbound`, `closed`, `inbound_evicted` or `misbehaving`.
-    pub kind: &'static str,
+    pub kind: LifecycleKind,
     /// How long the connection had been established, for close and evict events.
     pub time_established: Option<u64>,
     /// Connection count at the time, for open events.
@@ -49,8 +81,17 @@ pub struct PeerStats {
     pub messages_out: u64,
     pub bytes_in: u64,
     pub bytes_out: u64,
-    pub commands: HashMap<String, CommandCounts>,
+    /// Per-command counts, keyed by the interned kind id of the command.
+    ///
+    /// A `HashMap<String, _>` per peer costs a hash table and a `String` per
+    /// command; with the hundreds of thousands of peers a busy node produces
+    /// that dominated the peer table. A short vector scanned linearly is both
+    /// smaller and faster at this size (a peer sees a handful of commands).
+    pub commands: Vec<(u16, CommandCounts)>,
+    /// The most recent [`LIFECYCLE_CAP`] lifecycle events.
     pub lifecycle: Vec<LifecycleEvent>,
+    /// How many lifecycle events actually occurred, including those dropped.
+    pub lifecycle_total: u64,
 }
 
 impl PeerStats {
@@ -71,7 +112,7 @@ impl PeerStats {
 
     /// Total events attributed to this peer.
     pub fn events(&self) -> u64 {
-        self.messages_in + self.messages_out + self.lifecycle.len() as u64
+        self.messages_in + self.messages_out + self.lifecycle_total
     }
 
     /// How long the peer was observed for, in milliseconds.
@@ -126,14 +167,23 @@ impl PeerTable {
         peer
     }
 
-    /// Record a P2P message.
-    pub fn record_message(&mut self, timestamp: u64, event: &MessageEvent) {
+    /// Record a P2P message. `command` is the interned kind id of `meta.command`.
+    pub fn record_message(&mut self, timestamp: u64, event: &MessageEvent, command: u16) {
         let meta = &event.meta;
         let peer = self.entry(meta.peer_id, timestamp);
-        peer.addr = Some(meta.addr.clone());
+        if peer.addr.as_deref() != Some(meta.addr.as_str()) {
+            peer.addr = Some(meta.addr.clone());
+        }
         peer.conn_type = Some(meta.conn_type);
 
-        let counts = peer.commands.entry(meta.command.clone()).or_default();
+        let slot = match peer.commands.iter().position(|(id, _)| *id == command) {
+            Some(i) => i,
+            None => {
+                peer.commands.push((command, CommandCounts::default()));
+                peer.commands.len() - 1
+            }
+        };
+        let counts = &mut peer.commands[slot].1;
         if meta.inbound {
             peer.messages_in += 1;
             peer.bytes_in += meta.size;
@@ -158,7 +208,7 @@ impl PeerTable {
             ConnEvent::Closed(c) => (
                 c.conn.peer_id,
                 Some(&c.conn),
-                "closed",
+                LifecycleKind::Closed,
                 Some(c.time_established),
                 None,
                 None,
@@ -166,7 +216,7 @@ impl PeerTable {
             ConnEvent::InboundEvicted(c) => (
                 c.conn.peer_id,
                 Some(&c.conn),
-                "inbound_evicted",
+                LifecycleKind::InboundEvicted,
                 Some(c.time_established),
                 None,
                 None,
@@ -174,7 +224,7 @@ impl PeerTable {
             ConnEvent::Inbound(c) => (
                 c.conn.peer_id,
                 Some(&c.conn),
-                "inbound",
+                LifecycleKind::Inbound,
                 None,
                 Some(c.existing_connections),
                 None,
@@ -182,7 +232,7 @@ impl PeerTable {
             ConnEvent::Outbound(c) => (
                 c.conn.peer_id,
                 Some(&c.conn),
-                "outbound",
+                LifecycleKind::Outbound,
                 None,
                 Some(c.existing_connections),
                 None,
@@ -190,7 +240,7 @@ impl PeerTable {
             ConnEvent::Misbehaving(m) => (
                 m.id,
                 None,
-                "misbehaving",
+                LifecycleKind::Misbehaving,
                 None,
                 None,
                 Some(m.message.clone()),
@@ -200,6 +250,10 @@ impl PeerTable {
         let peer = self.entry(peer_id, timestamp);
         if let Some(conn) = conn {
             update_identity(peer, conn);
+        }
+        peer.lifecycle_total += 1;
+        if peer.lifecycle.len() == LIFECYCLE_CAP {
+            peer.lifecycle.remove(0);
         }
         peer.lifecycle.push(LifecycleEvent {
             timestamp,
@@ -246,16 +300,19 @@ mod tests {
     #[test]
     fn splits_messages_by_direction() {
         let mut peers = PeerTable::new();
-        peers.record_message(100, &message(1, "inv", true, 40));
-        peers.record_message(200, &message(1, "inv", true, 60));
-        peers.record_message(300, &message(1, "tx", false, 250));
+        const INV: u16 = 0;
+        const TX: u16 = 1;
+        peers.record_message(100, &message(1, "inv", true, 40), INV);
+        peers.record_message(200, &message(1, "inv", true, 60), INV);
+        peers.record_message(300, &message(1, "tx", false, 250), TX);
 
         let peer = peers.get(1).expect("peer recorded");
         assert_eq!((peer.messages_in, peer.bytes_in), (2, 100));
         assert_eq!((peer.messages_out, peer.bytes_out), (1, 250));
-        assert_eq!(peer.commands["inv"].inbound, 2);
-        assert_eq!(peer.commands["inv"].inbound_bytes, 100);
-        assert_eq!(peer.commands["tx"].outbound, 1);
+        let counts = |id: u16| peer.commands.iter().find(|(k, _)| *k == id).unwrap().1;
+        assert_eq!(counts(INV).inbound, 2);
+        assert_eq!(counts(INV).inbound_bytes, 100);
+        assert_eq!(counts(TX).outbound, 1);
         assert_eq!((peer.first_seen, peer.last_seen), (100, 300));
         assert_eq!(peer.duration_ms(), 200);
     }
@@ -265,7 +322,7 @@ mod tests {
     #[test]
     fn misbehaving_does_not_clobber_a_known_address() {
         let mut peers = PeerTable::new();
-        peers.record_message(100, &message(7, "version", true, 100));
+        peers.record_message(100, &message(7, "version", true, 100), 0);
         assert_eq!(peers.get(7).unwrap().addr.as_deref(), Some("10.0.0.1:8333"));
 
         peers.record_connection(
@@ -285,7 +342,7 @@ mod tests {
             "address survives"
         );
         assert_eq!(peer.lifecycle.len(), 1);
-        assert_eq!(peer.lifecycle[0].kind, "misbehaving");
+        assert_eq!(peer.lifecycle[0].kind, LifecycleKind::Misbehaving);
         assert_eq!(peer.lifecycle[0].message.as_deref(), Some("invalid header"));
     }
 
@@ -307,6 +364,34 @@ mod tests {
         let peer = peers.get(3).expect("peer recorded");
         assert_eq!(peer.addr, None);
         assert_eq!(peer.conn_type, None);
+    }
+
+    /// The peer table sits outside the event store's retention budget, so an
+    /// archive of a churny node must not be able to grow it without limit.
+    #[test]
+    fn the_lifecycle_list_is_capped_but_the_total_is_exact() {
+        use crate::proto::ebpf_extractor::connection::MisbehavingConnection;
+        let mut peers = PeerTable::new();
+        let events = LIFECYCLE_CAP as u64 * 10;
+        for i in 0..events {
+            peers.record_connection(
+                i,
+                &ConnectionEvent {
+                    event: Some(ConnEvent::Misbehaving(MisbehavingConnection {
+                        id: 1,
+                        message: format!("strike {i}"),
+                    })),
+                },
+            );
+        }
+
+        let peer = peers.get(1).expect("peer recorded");
+        assert_eq!(peer.lifecycle.len(), LIFECYCLE_CAP, "list is capped");
+        assert_eq!(peer.lifecycle_total, events, "the count stays exact");
+        assert_eq!(peer.events(), events, "totals use the real count");
+        // The most recent events are the ones kept.
+        assert_eq!(peer.lifecycle.last().unwrap().timestamp, events - 1);
+        assert_eq!(peer.lifecycle[0].timestamp, events - LIFECYCLE_CAP as u64);
     }
 
     #[test]

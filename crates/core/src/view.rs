@@ -46,6 +46,7 @@ pub fn summary(analysis: &Analysis) -> Value {
                 "category": info.category().as_str(),
                 "group": info.group.as_str(),
                 "kind": info.name,
+                "label": info.label(),
                 "count": count,
                 "share": share(count, analysis.total_events),
             })
@@ -75,6 +76,13 @@ pub fn summary(analysis: &Analysis) -> Value {
             "bytesUsed": analysis.store.bytes_used(),
             "budgetBytes": analysis.store.budget_bytes(),
             "full": analysis.store.is_full(),
+            "strippedEvents": analysis.stripped_events,
+            "strippedBytes": analysis.stripped_bytes,
+            "stoppedBecause": match analysis.store.stopped_because() {
+                Some(crate::store::StoppedBecause::Budget) => Some("budget"),
+                Some(crate::store::StoppedBecause::OutOfMemory) => Some("memory"),
+                None => None,
+            },
         },
         "breakdown": breakdown,
     })
@@ -91,42 +99,131 @@ pub fn progress(analysis: &Analysis) -> Value {
     })
 }
 
-/// The timeline, downsampled to at most `max_bins` columns.
+/// Merge a set of per-kind series into one downsampled series per output slot.
 ///
-/// The histogram keeps up to 4096 bins; a chart is typically a few hundred
-/// pixels wide, so merging down avoids shipping data the UI cannot draw.
-pub fn timeline(analysis: &Analysis, max_bins: usize) -> Value {
+/// The histogram keeps up to 4096 bins; a chart is a few hundred pixels wide, so
+/// merging down avoids shipping data the UI cannot draw. Whole numbers of source
+/// bins are merged so bin boundaries stay meaningful.
+fn downsample(
+    analysis: &Analysis,
+    slots: &[Vec<u16>],
+    max_bins: usize,
+) -> (usize, u64, Vec<Vec<u64>>) {
     let histogram = &analysis.histogram;
     let bins = histogram.bins();
-    if bins.is_empty() || max_bins == 0 {
-        return json!({
-            "startMs": 0, "binMs": histogram.bin_ms(), "count": 0,
-            "groups": group_names(), "series": Vec::<Vec<u64>>::new(),
-        });
+    if bins == 0 || max_bins == 0 {
+        return (0, histogram.bin_ms(), vec![Vec::new(); slots.len()]);
     }
+    let merge = bins.div_ceil(max_bins).max(1);
+    let out_len = bins.div_ceil(merge);
 
-    // Merge whole numbers of source bins so bin boundaries stay meaningful.
-    let merge = bins.len().div_ceil(max_bins).max(1);
-    let out_len = bins.len().div_ceil(merge);
-    let mut series = vec![vec![0u64; out_len]; GROUPS.len()];
-    for (i, bin) in bins.iter().enumerate() {
-        let target = i / merge;
-        for (group, count) in bin.iter().enumerate() {
-            series[group][target] += count;
+    let mut series = vec![vec![0u64; out_len]; slots.len()];
+    for (slot, kinds) in slots.iter().enumerate() {
+        for kind in kinds {
+            for (i, count) in histogram.series(*kind).iter().enumerate() {
+                if *count > 0 {
+                    series[slot][i / merge] += count;
+                }
+            }
         }
     }
+    (out_len, histogram.bin_ms() * merge as u64, series)
+}
 
+fn timeline_value(
+    analysis: &Analysis,
+    names: Vec<String>,
+    out: (usize, u64, Vec<Vec<u64>>),
+) -> Value {
+    let (count, bin_ms, series) = out;
     json!({
-        "startMs": histogram.start_ms(),
-        "binMs": histogram.bin_ms() * merge as u64,
-        "count": out_len,
-        "groups": group_names(),
+        "startMs": analysis.histogram.start_ms(),
+        "binMs": bin_ms,
+        "count": count,
         "series": series,
+        "names": names,
     })
 }
 
-fn group_names() -> Vec<&'static str> {
-    GROUPS.iter().map(|g| g.as_str()).collect()
+/// The whole archive over time, one series per event group.
+pub fn timeline(analysis: &Analysis, max_bins: usize) -> Value {
+    let slots: Vec<Vec<u16>> = GROUPS
+        .iter()
+        .map(|group| {
+            analysis
+                .kinds
+                .iter()
+                .filter(|(_, info)| info.group == *group)
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .collect();
+    let names = GROUPS.iter().map(|g| g.as_str().to_string()).collect();
+    timeline_value(analysis, names, downsample(analysis, &slots, max_bins))
+}
+
+/// One group over time, broken down by kind — the connection event rate by type,
+/// the message mix by command, and so on.
+///
+/// This covers every event in the archive, not just the retained ones, because
+/// the histogram is kept per kind.
+pub fn timeline_group(analysis: &Analysis, group: &str, max_bins: usize) -> Value {
+    // Busiest kinds first, and capped: a categorical palette is only readable
+    // for so many series, and `message` alone can have dozens of commands.
+    const MAX_SERIES: usize = 8;
+
+    let mut kinds: Vec<(u16, &str, u64)> = analysis
+        .kinds
+        .iter()
+        .filter(|(_, info)| info.group.as_str() == group)
+        .map(|(id, info)| {
+            (
+                id,
+                info.name.as_str(),
+                analysis.counts.get(id as usize).copied().unwrap_or(0),
+            )
+        })
+        .filter(|(_, _, count)| *count > 0)
+        .collect();
+    kinds.sort_by_key(|(id, _, count)| (std::cmp::Reverse(*count), *id));
+
+    let mut slots: Vec<Vec<u16>> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (id, name, _) in kinds.iter().take(MAX_SERIES) {
+        slots.push(vec![*id]);
+        names.push((*name).to_string());
+    }
+    if kinds.len() > MAX_SERIES {
+        // Everything past the cap folds into one bucket rather than being
+        // dropped or given a made-up colour.
+        slots.push(kinds[MAX_SERIES..].iter().map(|(id, _, _)| *id).collect());
+        names.push(format!("other ({})", kinds.len() - MAX_SERIES));
+    }
+
+    let mut value = timeline_value(analysis, names, downsample(analysis, &slots, max_bins));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("group".into(), json!(group));
+    }
+    value
+}
+
+/// Groups present in the archive, busiest first, for the breakdown selector.
+pub fn groups_present(analysis: &Analysis) -> Vec<&'static str> {
+    let mut totals: Vec<(&'static str, u64)> = GROUPS
+        .iter()
+        .map(|group| {
+            let total: u64 = analysis
+                .kinds
+                .iter()
+                .filter(|(_, info)| info.group == *group)
+                .map(|(id, _)| analysis.counts.get(id as usize).copied().unwrap_or(0))
+                .sum();
+            (group.as_str(), total)
+        })
+        .filter(|(_, total)| *total > 0)
+        .collect();
+    totals.sort_by_key(|(_, total)| std::cmp::Reverse(*total));
+    totals.into_iter().map(|(name, _)| name).collect()
 }
 
 /// How peer rows are ordered.
@@ -189,7 +286,7 @@ fn peer_row(peer: &PeerStats) -> Value {
         "bytesIn": peer.bytes_in,
         "bytesOut": peer.bytes_out,
         "events": peer.events(),
-        "lifecycleEvents": peer.lifecycle.len(),
+        "lifecycleEvents": peer.lifecycle_total,
     })
 }
 
@@ -204,7 +301,7 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         .iter()
         .map(|(command, counts)| {
             json!({
-                "command": command,
+                "command": analysis.kinds.get(*command).map(|k| k.name.as_str()).unwrap_or("?"),
                 "inbound": counts.inbound,
                 "outbound": counts.outbound,
                 "inboundBytes": counts.inbound_bytes,
@@ -221,7 +318,7 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         .map(|e| {
             json!({
                 "timestamp": e.timestamp,
-                "kind": e.kind,
+                "kind": e.kind.as_str(),
                 "timeEstablished": e.time_established,
                 "existingConnections": e.existing_connections,
                 "message": e.message,
@@ -234,6 +331,8 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         object.insert("found".into(), Value::Bool(true));
         object.insert("commands".into(), Value::Array(commands));
         object.insert("lifecycle".into(), Value::Array(lifecycle));
+        object.insert("lifecycleTotal".into(), json!(peer.lifecycle_total));
+        object.insert("lifecycleCap".into(), json!(crate::peers::LIFECYCLE_CAP));
     }
     row
 }
@@ -421,6 +520,7 @@ fn event_row(analysis: &Analysis, index: u32) -> Option<Value> {
         "category": info.map(|i| i.category().as_str()),
         "group": info.map(|i| i.group.as_str()),
         "kind": info.map(|i| i.name.clone()),
+        "label": info.map(|i| i.label()),
         "peerId": peer_id,
         "addr": addr,
         "inbound": row.inbound(),

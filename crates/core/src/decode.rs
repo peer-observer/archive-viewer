@@ -30,6 +30,9 @@ const DECOMPRESS_CHUNK: usize = 256 * 1024;
 /// Compact the scan buffer once this many consumed bytes have accumulated.
 const COMPACT_THRESHOLD: usize = 1024 * 1024;
 
+/// Spare capacity kept on the scan buffer after compacting.
+const OUT_SLACK: usize = 8 * 1024 * 1024;
+
 /// peer-observer archives are written by `zstd::Encoder::new`, which for higher
 /// levels declares a 128 MiB window — above ruzstd's 100 MB default, which would
 /// otherwise reject the file outright. Allow up to 512 MiB (windowLog 29).
@@ -301,6 +304,12 @@ impl RecordDecoder {
         if self.out_pos >= COMPACT_THRESHOLD {
             self.out.drain(..self.out_pos);
             self.out_pos = 0;
+        }
+        // zstd releases its retained window in one burst -- up to 128 MiB for
+        // these archives -- and `drain` keeps that capacity. Hand it back rather
+        // than holding it for the rest of the file.
+        if self.out.capacity() > self.out.len() + OUT_SLACK {
+            self.out.shrink_to(self.out.len() + OUT_SLACK);
         }
         Ok(())
     }

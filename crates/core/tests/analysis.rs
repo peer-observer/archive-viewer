@@ -304,3 +304,75 @@ fn an_event_with_no_arm_is_counted_as_unknown() {
     assert_eq!(count_of(&analysis, Group::EbpfMessage, UNKNOWN), 1);
     assert_eq!(analysis.counts.iter().sum::<u64>(), analysis.total_events);
 }
+
+/// Raw transaction data is most of a full-data archive. It must not be retained
+/// — but every aggregate must still be computed from the complete event.
+#[test]
+fn raw_transaction_data_is_dropped_from_retained_events() {
+    let header = header(1, None);
+    let events = vec![
+        transaction_event(100, 1, 250_000),
+        message_event(200, 1, "inv", true, 40),
+        transaction_event(300, 2, 250_000),
+    ];
+    let stream = record_stream(&header, &events);
+
+    let mut analysis = Analysis::new(BIG_BUDGET);
+    feed(&mut analysis, "a.bin", &stream);
+
+    assert_eq!(analysis.total_events, 3, "every event is counted");
+    assert_eq!(analysis.peers.len(), 2);
+    assert_eq!(analysis.stripped_events, 2);
+    assert!(
+        analysis.stripped_bytes >= 500_000,
+        "got {}",
+        analysis.stripped_bytes
+    );
+
+    // All three are retained, but the transactions no longer carry their bytes.
+    assert_eq!(analysis.store.len(), 3);
+    assert!(
+        analysis.store.bytes_used() < 10_000,
+        "retained {} bytes for a 500 kB payload",
+        analysis.store.bytes_used()
+    );
+
+    // The retained copy still decodes, and still identifies the transaction.
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::Transaction,
+        ebpf_extractor::{ebpf::EbpfEvent, message::message_event::Msg},
+        event::{event::PeerObserverEvent, Event},
+    };
+    use prost::Message;
+    let raw = analysis.store.bytes(0).expect("retained");
+    let decoded = Event::decode(raw).expect("stripped event still decodes");
+    let Some(PeerObserverEvent::EbpfExtractor(ebpf)) = &decoded.peer_observer_event else {
+        panic!("wrong arm")
+    };
+    let Some(EbpfEvent::Message(message)) = &ebpf.ebpf_event else {
+        panic!("wrong arm")
+    };
+    assert_eq!(message.meta.peer_id, 1, "metadata survives");
+    let Some(Msg::Tx(tx)) = &message.msg else {
+        panic!("wrong msg")
+    };
+    let Transaction { txid, wtxid, raw } = &tx.tx;
+    assert_eq!(txid.len(), 32, "txid kept");
+    assert_eq!(wtxid.len(), 32, "wtxid kept");
+    assert_eq!(*raw, None, "raw transaction dropped");
+}
+
+/// Stripping must not disturb events that carry no raw data.
+#[test]
+fn events_without_raw_data_are_retained_verbatim() {
+    let events = vec![message_event(100, 1, "inv", true, 40)];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BIG_BUDGET);
+    feed(&mut analysis, "a.bin", &stream);
+
+    assert_eq!(analysis.stripped_events, 0);
+    assert_eq!(analysis.stripped_bytes, 0);
+    let expected = framed(&events[0]);
+    // `framed` includes the length prefix; the store holds the message only.
+    assert_eq!(analysis.store.bytes(0).unwrap().len(), expected.len() - 1);
+}

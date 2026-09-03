@@ -105,12 +105,6 @@ pub struct KindInfo {
     pub name: String,
 }
 
-impl KindInfo {
-    pub fn category(&self) -> Category {
-        self.group.category()
-    }
-}
-
 /// Interns kinds to dense `u16` ids so events can be stored compactly.
 #[derive(Debug, Default)]
 pub struct KindTable {
@@ -261,6 +255,25 @@ fn classify_ipc(ipc: &Ipc) -> &'static str {
     }
 }
 
+impl KindInfo {
+    pub fn category(&self) -> Category {
+        self.group.category()
+    }
+
+    /// Display label for the event table.
+    ///
+    /// P2P message kinds are wire command names (`inv`, `version`) and stand on
+    /// their own. Everywhere else the bare kind is ambiguous — `rejected`,
+    /// `closed` and `block_connected` mean nothing without knowing whether they
+    /// came from the mempool, a connection or validation — so the group is
+    /// carried along.
+    pub fn label(&self) -> String {
+        match self.group {
+            Group::EbpfMessage => self.name.clone(),
+            group => format!("{} {}", group.as_str(), self.name),
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -59,6 +59,7 @@ fn timeline_downsamples_without_losing_events() {
 
     let series = timeline["series"].as_array().unwrap();
     assert_eq!(series.len(), 8, "one series per group");
+    assert_eq!(timeline["names"].as_array().unwrap().len(), 8);
     let total: u64 = series
         .iter()
         .flat_map(|s| s.as_array().unwrap())
@@ -74,7 +75,7 @@ fn timeline_of_an_empty_analysis_is_well_formed() {
     let timeline = view::timeline(&analysis, 100);
 
     assert_eq!(timeline["count"], 0);
-    assert_eq!(timeline["groups"].as_array().unwrap().len(), 8);
+    assert_eq!(timeline["names"].as_array().unwrap().len(), 8);
 }
 
 #[test]
@@ -273,4 +274,108 @@ fn a_filter_deserialises_from_the_ui_json() {
     // An empty object means "no constraint", not "match nothing".
     let empty: Filter = serde_json::from_str("{}").expect("empty filter parses");
     assert_eq!(empty, Filter::default());
+}
+
+#[test]
+fn a_group_timeline_breaks_the_group_down_by_kind() {
+    let analysis = loaded();
+    let breakdown = view::timeline_group(&analysis, "connection", 8);
+
+    assert_eq!(breakdown["group"], "connection");
+    let names = breakdown["names"].as_array().unwrap();
+    assert_eq!(names.len(), 1, "the fixture only has inbound connections");
+    assert_eq!(names[0], "inbound");
+
+    let plotted: u64 = breakdown["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s.as_array().unwrap())
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert_eq!(plotted, 10, "every connection event is plotted");
+}
+
+/// A group with more kinds than the palette can carry folds the tail into one
+/// bucket rather than dropping it.
+#[test]
+fn a_group_timeline_folds_excess_kinds_into_other() {
+    let mut events = Vec::new();
+    for i in 0..40u64 {
+        // 20 distinct commands, with decreasing frequency.
+        let command = format!("cmd{:02}", i % 20);
+        for _ in 0..(20 - (i % 20)) {
+            events.push(message_event(1_000 + i, 1, &command, true, 10));
+        }
+    }
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("a.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let breakdown = view::timeline_group(&analysis, "message", 16);
+    let names: Vec<String> = breakdown["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(names.len(), 9, "eight kinds plus one 'other' bucket");
+    assert!(
+        names.last().unwrap().starts_with("other ("),
+        "got {names:?}"
+    );
+
+    let plotted: u64 = breakdown["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s.as_array().unwrap())
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert_eq!(plotted, events.len() as u64, "folding loses nothing");
+}
+
+#[test]
+fn groups_present_lists_only_groups_with_events_busiest_first() {
+    let analysis = loaded();
+    assert_eq!(
+        view::groups_present(&analysis),
+        vec!["message", "connection"]
+    );
+    assert!(view::groups_present(&Analysis::new(BUDGET)).is_empty());
+}
+
+/// A bare kind name like `rejected` or `closed` is meaningless on its own, so
+/// non-message kinds carry their group in the event table.
+#[test]
+fn event_labels_qualify_ambiguous_kinds() {
+    let analysis = loaded();
+    let mut cache = QueryCache::new();
+
+    let messages = view::query(
+        &analysis,
+        &mut cache,
+        &Filter {
+            groups: vec!["message".into()],
+            ..Default::default()
+        },
+        0,
+        1,
+    );
+    assert_eq!(messages["rows"][0]["label"], "inv", "commands stand alone");
+
+    let connections = view::query(
+        &analysis,
+        &mut cache,
+        &Filter {
+            groups: vec!["connection".into()],
+            ..Default::default()
+        },
+        0,
+        1,
+    );
+    assert_eq!(connections["rows"][0]["label"], "connection inbound");
 }

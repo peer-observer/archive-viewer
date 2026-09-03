@@ -12,6 +12,7 @@ use crate::proto::{
     header::ArchiveHeader,
 };
 use crate::store::{flags, EventStore, NO_PEER};
+use crate::strip::strip_raw_payloads;
 use prost::Message;
 
 /// What we know about one archive file in the session.
@@ -48,6 +49,10 @@ pub struct Analysis {
     pub files: Vec<FileSummary>,
     pub total_events: u64,
     pub decode_errors: u64,
+    /// Events whose raw transaction or block data was dropped before retention.
+    pub stripped_events: u64,
+    /// Bytes of raw transaction and block data dropped before retention.
+    pub stripped_bytes: u64,
     pub first_timestamp: Option<u64>,
     pub last_timestamp: Option<u64>,
     decoder: Option<RecordDecoder>,
@@ -65,6 +70,8 @@ impl Analysis {
             files: Vec::new(),
             total_events: 0,
             decode_errors: 0,
+            stripped_events: 0,
+            stripped_bytes: 0,
             first_timestamp: None,
             last_timestamp: None,
             decoder: None,
@@ -204,12 +211,12 @@ impl RecordSink for Ingest<'_> {
             return;
         }
 
-        let Ok(event) = Event::decode(bytes) else {
+        let Ok(mut event) = Event::decode(bytes) else {
             // One unreadable record must not abandon the rest of the archive.
             self.note_decode_error();
             return;
         };
-        self.ingest_event(&event, bytes);
+        self.ingest_event(&mut event, bytes);
     }
 }
 
@@ -221,7 +228,7 @@ impl Ingest<'_> {
         }
     }
 
-    fn ingest_event(&mut self, event: &Event, bytes: &[u8]) {
+    fn ingest_event(&mut self, event: &mut Event, bytes: &[u8]) {
         let timestamp = event.timestamp;
         let (group, name) = classify(event);
         let kind = self.analysis.kinds.intern(group, name);
@@ -232,7 +239,7 @@ impl Ingest<'_> {
             summary.events += 1;
         }
         analysis.count_kind(kind);
-        analysis.histogram.add(timestamp, group);
+        analysis.histogram.add(timestamp, kind);
         analysis.first_timestamp = Some(
             analysis
                 .first_timestamp
@@ -244,21 +251,37 @@ impl Ingest<'_> {
                 .map_or(timestamp, |t| t.max(timestamp)),
         );
 
-        let (peer, event_flags, size) = self.attribute_to_peer(event, timestamp);
-        self.analysis
-            .store
-            .push(timestamp, kind, peer, event_flags, size, bytes);
+        let (peer, event_flags, size) = self.attribute_to_peer(event, timestamp, kind);
+
+        // Retain a copy without raw transaction and block data. Those bytes are
+        // most of a full-data archive and nothing here reads them, so keeping
+        // them would spend the retention budget -- and the browser's memory --
+        // on payloads no view displays. Everything above saw the whole event.
+        let dropped = strip_raw_payloads(event);
+        let analysis = &mut *self.analysis;
+        if dropped > 0 {
+            analysis.stripped_events += 1;
+            analysis.stripped_bytes += dropped as u64;
+            let stripped = event.encode_to_vec();
+            analysis
+                .store
+                .push(timestamp, kind, peer, event_flags, size, &stripped);
+        } else {
+            analysis
+                .store
+                .push(timestamp, kind, peer, event_flags, size, bytes);
+        }
     }
 
     /// Update the peer table and return the columns describing this event's peer.
-    fn attribute_to_peer(&mut self, event: &Event, timestamp: u64) -> (u32, u8, u32) {
+    fn attribute_to_peer(&mut self, event: &Event, timestamp: u64, kind: u16) -> (u32, u8, u32) {
         let Some(PeerObserverEvent::EbpfExtractor(ebpf)) = &event.peer_observer_event else {
             return (NO_PEER, 0, 0);
         };
         let peers = &mut self.analysis.peers;
         match &ebpf.ebpf_event {
             Some(EbpfEvent::Message(message)) => {
-                peers.record_message(timestamp, message);
+                peers.record_message(timestamp, message, kind);
                 let meta = &message.meta;
                 let mut event_flags = flags::HAS_DIRECTION;
                 if meta.inbound {

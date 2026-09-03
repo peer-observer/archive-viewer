@@ -20,9 +20,14 @@ Drag one or more archive files onto the page, or press **Open archive…**.
 - **Archives still being written are fine.** They end mid-stream; everything
   before the cut is read and the truncation is reported.
 - **Big archives** are handled by always aggregating every event, while retaining
-  the raw event bytes only up to a memory budget (1 GB by default, selectable in
-  the header). Past that the event table and inspector cover the first *N* events
-  and say so; the totals, timeline and peer statistics still cover everything.
+  the event bytes only up to a memory budget (512 MB by default, selectable in
+  the bar). Past that the event table and inspector cover the first *N* events and
+  say so; the totals, charts and peer statistics still cover everything.
+- **Raw transaction and block data is not retained.** It is most of a full-data
+  archive and no view reads it, so the retained copy is stripped of exactly what
+  peer-observer's own `--low-data` mode strips: transactions keep their txid and
+  wtxid, blocks keep their header, and the wire size stays on the message
+  metadata. Aggregation still runs over the complete event.
 
 Two things the archive format cannot tell you, which the page says so you don't
 have to guess:
@@ -141,7 +146,24 @@ toolchain.
 **The timeline** is an adaptive histogram: an archive's time range is not known
 until its last event, so it starts at 100 ms bins and halves its resolution
 whenever it would exceed 4096 bins. Counts stay exact in constant memory with no
-second pass.
+second pass. Counts are kept per event kind rather than per group, so a group can
+be broken down by type -- the connection rate by inbound/outbound/closed/evicted --
+over the whole archive rather than only over the retained events.
+
+**Memory.** A wasm32 module has a 4 GiB address space and browsers allow rather
+less, and an allocation failure aborts the module outright: the browser reports
+`unreachable executed`, and every later call fails with "recursive use of an
+object detected". Four things keep that from happening. Event bytes go into
+fixed-size chunks rather than one growing buffer, so reaching a 512 MB budget
+never needs a ~1.5 GB transient to double through. Every store allocation is
+fallible, so exhaustion stops retention instead of the module. Raw transaction
+and block payloads are dropped, which is the single biggest win. And the peer
+table, which sits outside the budget, caps its per-peer connection lifecycle list
+while keeping an exact count.
+
+Measured on a synthetic full-data archive -- 3.4 GB decompressed, 400,000 `tx`
+messages carrying raw transactions: all 400,000 events retained in 59 MB, peak
+RSS 261 MB, 3.33 GB of payload dropped.
 
 **The event inspector** decodes the selected event against an embedded
 `FileDescriptorSet` using `prost-reflect`, rather than matching on the schema's

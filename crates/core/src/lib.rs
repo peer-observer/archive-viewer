@@ -18,4 +18,5 @@ pub mod kind;
 pub mod peers;
 pub mod proto;
 pub mod store;
+pub mod strip;
 pub mod view;

@@ -11,11 +11,16 @@ use archive_viewer_core::inspect::{self, Schema};
 use archive_viewer_core::view::{self, Filter, QueryCache};
 use wasm_bindgen::prelude::*;
 
-/// Default retention budget: 1 GiB.
-const DEFAULT_BUDGET: f64 = 1024.0 * 1024.0 * 1024.0;
+/// Default retention budget.
+///
+/// Deliberately well under the address space: wasm32 tops out at 4 GiB, browsers
+/// in practice allow rather less, and the zstd decoder needs its own 128 MiB
+/// window on top. Retention failing is a labelled partial view; the module
+/// running out of memory is a dead page.
+const DEFAULT_BUDGET: f64 = 512.0 * 1024.0 * 1024.0;
 
-/// wasm32 has a 4 GiB address space, and the decoder and browser need room too.
-const MAX_BUDGET: f64 = 3.0 * 1024.0 * 1024.0 * 1024.0;
+/// Hard ceiling, whatever the page asks for.
+const MAX_BUDGET: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
 
 /// One viewing session. Several rotated archive files can be fed in and are
 /// reported as one continuous archive.
@@ -82,6 +87,20 @@ impl Session {
     /// Per-group event counts over time, downsampled to at most `bins` columns.
     pub fn timeline(&self, bins: u32) -> String {
         view::timeline(&self.analysis, bins as usize).to_string()
+    }
+
+    /// One group over time, broken down by kind -- connection events by type,
+    /// messages by command, and so on. Covers every event in the archive, not
+    /// only the retained ones.
+    #[wasm_bindgen(js_name = timelineGroup)]
+    pub fn timeline_group(&self, group: &str, bins: u32) -> String {
+        view::timeline_group(&self.analysis, group, bins as usize).to_string()
+    }
+
+    /// Groups that actually occur in the archive, busiest first.
+    #[wasm_bindgen(js_name = groupsPresent)]
+    pub fn groups_present(&self) -> String {
+        serde_json::json!(view::groups_present(&self.analysis)).to_string()
     }
 
     /// A page of the peer table.

@@ -107,7 +107,7 @@ fn stats(paths: &[String]) {
     );
     println!(
         "timeline          {} bins of {} ms",
-        analysis.histogram.bins().len(),
+        analysis.histogram.bins(),
         analysis.histogram.bin_ms()
     );
     println!(
@@ -119,6 +119,10 @@ fn stats(paths: &[String]) {
         } else {
             ""
         }
+    );
+    println!(
+        "raw data dropped  {} events, {} bytes (transaction and block payloads)",
+        analysis.stripped_events, analysis.stripped_bytes
     );
     println!("elapsed           {elapsed:.3}s");
     println!(
