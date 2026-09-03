@@ -379,3 +379,57 @@ fn event_labels_qualify_ambiguous_kinds() {
     );
     assert_eq!(connections["rows"][0]["label"], "connection inbound");
 }
+
+/// `time_established` is a UNIX epoch timestamp in seconds, not a duration.
+/// Reporting it as one would show a connection as having lived for decades.
+#[test]
+fn lifecycle_events_report_a_real_connection_lifetime() {
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::ConnType,
+        ebpf_extractor::{
+            self,
+            connection::{
+                connection_event::Event as ConnEvent, ClosedConnection, Connection, ConnectionEvent,
+            },
+        },
+        event::{event, Event},
+    };
+
+    let established_secs = 1_700_000_000u64;
+    let closed_ms = established_secs * 1000 + 4_500; // 4.5 s later
+    let event = Event {
+        timestamp: closed_ms,
+        peer_observer_event: Some(event::PeerObserverEvent::EbpfExtractor(
+            ebpf_extractor::Ebpf {
+                ebpf_event: Some(ebpf_extractor::ebpf::EbpfEvent::Connection(
+                    ConnectionEvent {
+                        event: Some(ConnEvent::Closed(ClosedConnection {
+                            conn: Connection {
+                                peer_id: 1,
+                                addr: "10.0.0.1:8333".into(),
+                                conn_type: ConnType::Inbound as i32,
+                                network: 1,
+                            },
+                            time_established: established_secs,
+                        })),
+                    },
+                )),
+            },
+        )),
+    };
+
+    let stream = record_stream(&header(1, None), &[event]);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("a.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let detail = view::peer_detail(&analysis, 1);
+    let entry = &detail["lifecycle"][0];
+    assert_eq!(entry["kind"], "closed");
+    assert_eq!(
+        entry["lifetimeMs"], 4_500,
+        "lifetime, not the raw timestamp"
+    );
+    assert_eq!(entry["establishedAt"], established_secs * 1000);
+}

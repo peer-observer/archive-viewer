@@ -1,2 +1,7 @@
 /target
 /web/pkg
+
+# Archive files are data, never source. Keep them out of the repo.
+*.bin
+*.bin.zst
+*.zst

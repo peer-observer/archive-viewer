@@ -1066,7 +1066,7 @@ function selectPeer(peerId) {
     const tbody = el('tbody');
     for (const e of d.lifecycle) {
       const extra = e.message ? e.message
-        : e.timeEstablished != null ? `established ${dur(Number(e.timeEstablished) * 1000)}`
+        : e.lifetimeMs != null ? `lived ${dur(e.lifetimeMs)}`
         : e.existingConnections != null ? `${num(e.existingConnections)} existing` : '';
       const tr = el('tr');
       tr.append(td(utc(e.timestamp, false), 'm dim'), td(e.kind, 'm'), td(extra, 'dim'));

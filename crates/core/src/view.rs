@@ -319,7 +319,13 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
             json!({
                 "timestamp": e.timestamp,
                 "kind": e.kind.as_str(),
-                "timeEstablished": e.time_established,
+                // `time_established` is a UNIX epoch timestamp in *seconds*, not
+                // a duration. What is actually interesting is how long the
+                // connection lived, so derive that from the event's own
+                // millisecond timestamp.
+                "establishedAt": e.time_established.map(|s| s * 1000),
+                "lifetimeMs": e.time_established
+                    .map(|s| e.timestamp.saturating_sub(s * 1000)),
                 "existingConnections": e.existing_connections,
                 "message": e.message,
             })
