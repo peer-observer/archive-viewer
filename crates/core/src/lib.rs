@@ -13,7 +13,9 @@
 pub mod analysis;
 pub mod decode;
 pub mod histogram;
+pub mod inspect;
 pub mod kind;
 pub mod peers;
 pub mod proto;
 pub mod store;
+pub mod view;

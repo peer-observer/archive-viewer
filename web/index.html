@@ -1,0 +1,1323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>peer-observer archive viewer</title>
+<style>
+/* ------------------------------------------------------------------ tokens */
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3f0;
+  --surface-1: #fcfcfb;
+  --surface-2: #eceae5;
+  --border:    #d9d7d0;
+  --border-strong: #b9b6ad;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #77756e;
+  --accent:  #2a78d6;
+  --warning: #b06400;
+  --danger:  #c0322f;
+
+  /* Categorical series, one per event group. Fixed order, never cycled.
+     Validated for both modes: worst adjacent CVD dE 9.1 light / 8.4 dark. */
+  --series-1: #2a78d6;  /* ebpf.message    */
+  --series-2: #eb6834;  /* ebpf.connection */
+  --series-3: #1baf7a;  /* ebpf.mempool    */
+  --series-4: #eda100;  /* ebpf.validation */
+  --series-5: #e87ba4;  /* rpc             */
+  --series-6: #008300;  /* p2p             */
+  --series-7: #4a3aa7;  /* log             */
+  --series-8: #e34948;  /* ipc             */
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #242422;
+    --border:    #33332f;
+    --border-strong: #4a4a45;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #8f8d84;
+    --accent:  #3987e5;
+    --warning: #e0a030;
+    --danger:  #e66767;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+}
+
+/* ------------------------------------------------------------------- reset */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font: 14px/1.5 var(--sans);
+  color: var(--text-primary);
+  background: var(--surface-0);
+}
+h1, h2, h3 { margin: 0; font-weight: 600; }
+button { font: inherit; }
+[hidden] { display: none !important; }
+
+/* ------------------------------------------------------------------ layout */
+header {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 15px; letter-spacing: -0.01em; }
+header .sub { color: var(--text-muted); font-size: 12.5px; }
+header .spacer { flex: 1; }
+main { padding: 20px; max-width: 1500px; margin: 0 auto; }
+
+.btn {
+  padding: 5px 12px; border-radius: var(--radius);
+  border: 1px solid var(--border-strong); background: var(--surface-1);
+  color: var(--text-primary); cursor: pointer;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+select, input[type=search], input[type=number] {
+  font: inherit; padding: 4px 8px; border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-1); color: var(--text-primary);
+}
+
+/* -------------------------------------------------------------- drop zone */
+#dropzone {
+  border: 2px dashed var(--border-strong); border-radius: 12px;
+  padding: 64px 24px; text-align: center; background: var(--surface-1);
+}
+#dropzone h2 { font-size: 18px; margin-bottom: 8px; }
+#dropzone p { color: var(--text-secondary); margin: 6px 0; }
+#dropzone code { font-family: var(--mono); font-size: 12.5px; }
+body.dragging #dropzone { border-color: var(--accent); background: var(--surface-2); }
+#drop-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 3px dashed var(--accent);
+  display: grid; place-items: center; font-size: 18px; font-weight: 600;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------- progress */
+#loading { background: var(--surface-1); border: 1px solid var(--border);
+           border-radius: var(--radius); padding: 20px; }
+.bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin: 12px 0; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .1s linear; }
+
+/* ------------------------------------------------------------------- tabs */
+nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+nav.tabs button {
+  padding: 8px 14px; border: none; background: none; cursor: pointer;
+  color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+nav.tabs button[aria-selected=true] { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* ------------------------------------------------------------------ cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.card .label { color: var(--text-muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+.card .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.card .note { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 18px; }
+.panel > h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: 12px; }
+
+.notice { border-left: 3px solid var(--warning); background: var(--surface-2);
+          padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin-bottom: 12px; font-size: 13px; }
+.notice.error { border-left-color: var(--danger); }
+.notice strong { font-weight: 600; }
+
+/* ----------------------------------------------------------------- tables */
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-muted); font-weight: 600; font-size: 11.5px;
+     text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text-primary); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+td.mono { font-family: var(--mono); font-size: 12.5px; }
+tbody tr:hover { background: var(--surface-2); }
+tbody tr.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.scroll { overflow-x: auto; }
+
+/* Inline share bar in the breakdown table. */
+.sharebar { display: block; height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; }
+
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: -1px; }
+
+/* ---------------------------------------------------------------- charts */
+.chart-wrap { position: relative; }
+canvas { display: block; width: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12.5px; }
+.legend span.item { color: var(--text-secondary); white-space: nowrap; }
+.legend span.item b { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+.legend span.item.off { opacity: .35; }
+#tooltip {
+  position: absolute; pointer-events: none; z-index: 20;
+  background: var(--surface-1); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); padding: 8px 10px; font-size: 12.5px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / .18); min-width: 160px;
+}
+#tooltip .t-time { color: var(--text-muted); font-family: var(--mono); font-size: 11.5px; margin-bottom: 5px; }
+#tooltip table { font-size: 12px; }
+#tooltip td { border: none; padding: 1px 0; }
+#tooltip td.v { text-align: right; padding-left: 14px; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+/* ------------------------------------------------------- events + filters */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 12.5px;
+}
+.chip button { border: none; background: none; cursor: pointer; color: var(--text-muted);
+               font-size: 15px; line-height: 1; padding: 0 4px; }
+.chip button:hover { color: var(--danger); }
+
+#events-viewport { height: 58vh; overflow: auto; border: 1px solid var(--border);
+                   border-radius: var(--radius); background: var(--surface-1); position: relative; }
+#events-spacer { position: relative; }
+#events-rows { position: absolute; left: 0; right: 0; top: 0; }
+.erow {
+  display: grid; grid-template-columns: 90px 200px 190px 120px 1fr 90px;
+  gap: 10px; padding: 0 12px; height: 26px; align-items: center;
+  border-bottom: 1px solid var(--border); font-size: 12.5px; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+}
+.erow:hover { background: var(--surface-2); }
+.erow.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.erow .m { font-family: var(--mono); }
+.erow .r { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.erow .dim { color: var(--text-muted); }
+#events-head {
+  display: grid; grid-template-columns: 90px 200px 190px 120px 1fr 90px;
+  gap: 10px; padding: 6px 12px; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--text-muted); font-weight: 600;
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0; background: var(--surface-2);
+}
+#events-head + #events-viewport { border-radius: 0 0 var(--radius) var(--radius); }
+
+/* -------------------------------------------------------------- inspector */
+.json { font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+        white-space: pre-wrap; word-break: break-word; margin: 0; }
+.json .k { color: var(--accent); }
+.json .s { color: var(--series-3); }
+.json .n { color: var(--series-2); }
+.json .b { color: var(--series-7); }
+.json .null { color: var(--text-muted); }
+
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .two-col { grid-template-columns: minmax(0, 1fr); } }
+
+.muted { color: var(--text-muted); }
+.small { font-size: 12.5px; }
+kbd { font-family: var(--mono); background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>peer-observer archive viewer</h1>
+  <span class="sub">decoded locally &mdash; nothing is uploaded</span>
+  <span class="spacer"></span>
+  <label class="sub" for="budget">retain</label>
+  <select id="budget" title="How much raw event data to keep for the event table and inspector. Totals always cover every event.">
+    <option value="268435456">256 MB</option>
+    <option value="1073741824" selected>1 GB</option>
+    <option value="2147483648">2 GB</option>
+  </select>
+  <button class="btn primary" id="pick">Open archive&hellip;</button>
+  <button class="btn" id="reset" hidden>Clear</button>
+  <input type="file" id="file" multiple accept=".zst,.bin" hidden>
+</header>
+
+<main>
+  <div id="drop-overlay" hidden>Drop archive files to load</div>
+
+  <section id="dropzone">
+    <h2>Drop a peer-observer archive here</h2>
+    <p>Drag one or more <code>.bin.zst</code> or <code>.bin</code> files onto this page, or press
+       <button class="btn" id="pick2">Open archive&hellip;</button></p>
+    <p class="small muted">
+      Rotated files dropped together are read as one continuous archive.
+      Archives still being written are fine &mdash; everything up to the cut is read.
+    </p>
+  </section>
+
+  <section id="loading" hidden>
+    <h3 id="loading-name">Loading&hellip;</h3>
+    <div class="bar"><i id="loading-bar"></i></div>
+    <p class="small muted" id="loading-stats"></p>
+  </section>
+
+  <section id="app" hidden>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="summary"  aria-selected="true">Summary</button>
+      <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
+      <button role="tab" data-tab="peers"    aria-selected="false">Peers</button>
+      <button role="tab" data-tab="events"   aria-selected="false">Events</button>
+    </nav>
+
+    <!-- ------------------------------------------------------- summary -->
+    <div id="tab-summary" role="tabpanel">
+      <div id="summary-notices"></div>
+      <div class="cards" id="summary-cards"></div>
+
+      <div class="panel">
+        <h3>Files</h3>
+        <div class="scroll"><table id="files-table"></table></div>
+      </div>
+
+      <div class="panel">
+        <h3>Event breakdown</h3>
+        <div class="scroll"><table id="breakdown-table"></table></div>
+        <p class="small muted" style="margin:12px 0 0">
+          Which event types an archive contains depends on the flags the producing archiver ran with
+          (<code>--messages</code>, <code>--connections</code>, &hellip;), and those flags are not recorded
+          in the file. A type that is absent here may simply have been filtered out at capture time.
+        </p>
+      </div>
+    </div>
+
+    <!-- ------------------------------------------------------ timeline -->
+    <div id="tab-timeline" role="tabpanel" hidden>
+      <div class="panel">
+        <h3>Events over time, by group</h3>
+        <div class="chart-wrap">
+          <canvas id="timeline" height="320"></canvas>
+          <div id="tooltip" hidden></div>
+        </div>
+        <div class="legend" id="timeline-legend"></div>
+        <p class="small muted" style="margin:14px 0 0">
+          Drag across the chart to select a time range; it becomes a filter on the Events tab.
+          Click a group in the legend to hide it. Summary and Peers always cover the whole archive.
+        </p>
+      </div>
+    </div>
+
+    <!-- --------------------------------------------------------- peers -->
+    <div id="tab-peers" role="tabpanel" hidden>
+      <div id="peers-empty" class="panel" hidden>
+        <p class="muted" style="margin:0">
+          No peers in this archive. Peers come from eBPF message and connection events; an archive
+          captured with only, say, mempool or RPC events will have none.
+        </p>
+      </div>
+      <div class="two-col" id="peers-layout">
+        <div class="panel" style="padding-top:12px">
+          <div class="filters">
+            <input type="search" id="peer-search" placeholder="Filter by address or peer id&hellip;" style="flex:1;min-width:200px">
+            <span class="small muted" id="peers-count"></span>
+          </div>
+          <div class="scroll" style="max-height:64vh;overflow-y:auto">
+            <table id="peers-table"></table>
+          </div>
+        </div>
+        <div class="panel" id="peer-detail">
+          <h3>Peer detail</h3>
+          <p class="muted small" style="margin:0">Select a peer to see its message mix and connection lifecycle.</p>
+        </div>
+      </div>
+      <p class="small muted">
+        Peer ids are assigned by Bitcoin Core and are only unique within one node run, so an archive
+        spanning a restart can reuse them.
+      </p>
+    </div>
+
+    <!-- -------------------------------------------------------- events -->
+    <div id="tab-events" role="tabpanel" hidden>
+      <div id="events-notice"></div>
+      <div class="filters">
+        <select id="filter-group"><option value="">All groups</option></select>
+        <select id="filter-kind"><option value="">All kinds</option></select>
+        <input type="search" id="filter-text" placeholder="Search kind or address&hellip;" style="min-width:220px">
+        <span id="filter-chips"></span>
+        <span class="spacer" style="flex:1"></span>
+        <span class="small muted" id="events-count"></span>
+      </div>
+      <div class="two-col">
+        <div>
+          <div id="events-head">
+            <span>#</span><span>Time (UTC)</span><span>Kind</span><span>Peer</span><span>Address</span><span class="r" style="text-align:right">Size</span>
+          </div>
+          <div id="events-viewport">
+            <div id="events-spacer"><div id="events-rows"></div></div>
+          </div>
+        </div>
+        <div class="panel" id="inspector">
+          <h3>Event</h3>
+          <p class="muted small" style="margin:0">Select an event to decode it in full.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import init, { Session } from './pkg/archive_viewer_wasm.js';
+
+/* ===================================================================== util */
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+const NBSP = ' ';
+const num = (n) => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('en-US');
+
+function bytes(n) {
+  if (n === null || n === undefined) return '—';
+  const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+  let i = 0, v = Number(n);
+  while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+  return `${v.toFixed(i === 0 ? 0 : v < 10 ? 2 : 1)}${NBSP}${units[i]}`;
+}
+
+function duration(ms) {
+  if (!ms) return '0s';
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60), rs = Math.round(s % 60);
+  if (m < 60) return `${m}m${NBSP}${rs}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h${NBSP}${m % 60}m`;
+}
+
+/** Archive timestamps are milliseconds since the epoch; always shown in UTC. */
+function utc(ms, withMillis = true) {
+  if (ms === null || ms === undefined) return '—';
+  const d = new Date(Number(ms));
+  if (Number.isNaN(d.getTime())) return '—';
+  const iso = d.toISOString();
+  return withMillis ? iso.replace('T', ' ').replace('Z', '') : iso.slice(0, 19).replace('T', ' ');
+}
+
+/**
+ * Yield to the browser without the 4ms clamp `setTimeout(0)` carries. Loading a
+ * large archive means thousands of yields, where that clamp alone would add
+ * minutes of pure waiting.
+ */
+const yieldNow = (() => {
+  if (typeof scheduler !== 'undefined' && scheduler.yield) return () => scheduler.yield();
+  const channel = new MessageChannel();
+  const waiting = [];
+  channel.port1.onmessage = () => waiting.shift()?.();
+  return () => new Promise((resolve) => { waiting.push(resolve); channel.port2.postMessage(0); });
+})();
+
+/**
+ * Sort rotated archive files into capture order.
+ *
+ * Names look like `<base>.<YYYYMMDD-HHMMSS-mmm>.bin[.zst]`, and the base is free
+ * text that can itself contain dots and plus signs (`addr+connection...`), so the
+ * timestamp is matched from the right rather than by splitting on dots.
+ */
+const NAME_TIMESTAMP = /\.(\d{8})-(\d{6})-(\d{3})\.bin(\.zst)?$/;
+function sortByCaptureTime(files) {
+  const key = (f) => {
+    const m = NAME_TIMESTAMP.exec(f.name);
+    return m ? `${m[1]}${m[2]}${m[3]}` : '';
+  };
+  return [...files].sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    if (ka && kb && ka !== kb) return ka < kb ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const seriesColor = (i) => cssVar(`--series-${(i % 8) + 1}`);
+
+/* ==================================================================== state */
+
+const state = {
+  session: null,
+  summary: null,
+  timeline: null,
+  hiddenGroups: new Set(),
+  filter: { groups: [], kinds: [], peerId: null, timeFrom: null, timeTo: null, text: '' },
+  selectedEvent: null,
+  selectedPeer: null,
+  peerSort: { key: 'events', desc: true },
+  peerRows: [],
+  eventTotal: 0,
+  tab: 'summary',
+};
+
+/* ================================================================== loading */
+
+async function loadFiles(fileList) {
+  const files = sortByCaptureTime(fileList);
+  if (!files.length) return;
+
+  $('dropzone').hidden = true;
+  $('app').hidden = true;
+  $('loading').hidden = false;
+  $('reset').hidden = false;
+
+  const budget = Number($('budget').value);
+  state.session = new Session(budget);
+  state.selectedEvent = null;
+  state.selectedPeer = null;
+
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  let doneBytes = 0;
+  const started = performance.now();
+
+  for (const file of files) {
+    $('loading-name').textContent = `Reading ${file.name}`;
+    state.session.beginFile(file.name, file.size);
+
+    const reader = file.stream().getReader();
+    let lastYield = performance.now();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      try {
+        state.session.push(value);
+      } catch (error) {
+        // Not an archive, or corrupt. It is recorded against this file; stop
+        // reading it but keep whatever the other files gave us.
+        console.warn(`${file.name}: ${error.message ?? error}`);
+        break;
+      }
+      doneBytes += value.length;
+      // Yield on a time budget, not per chunk: a 1 GiB file is ~16k chunks.
+      if (performance.now() - lastYield > 40) {
+        showProgress(doneBytes, totalBytes);
+        await yieldNow();
+        lastYield = performance.now();
+      }
+    }
+    state.session.endFile();
+    showProgress(doneBytes, totalBytes);
+  }
+
+  const elapsed = (performance.now() - started) / 1000;
+  $('loading').hidden = true;
+  $('app').hidden = false;
+  render(elapsed);
+}
+
+function showProgress(done, total) {
+  $('loading-bar').style.width = `${total ? (done / total) * 100 : 0}%`;
+  const p = JSON.parse(state.session.progress());
+  $('loading-stats').textContent =
+    `${bytes(done)} of ${bytes(total)} read · ${num(p.events)} events · ${num(p.peers)} peers`;
+}
+
+/* ================================================================ rendering */
+
+function render(elapsedSeconds) {
+  state.summary = JSON.parse(state.session.summary());
+  renderSummary(elapsedSeconds);
+  buildFilterOptions();
+  renderPeers();
+  resetEventsView();
+  drawTimeline();
+  showTab(state.tab);
+}
+
+/* ------------------------------------------------------------------ summary */
+
+function renderSummary(elapsedSeconds) {
+  const { totals, retention, files } = state.summary;
+
+  const notices = $('summary-notices');
+  notices.replaceChildren();
+
+  for (const file of files.filter((f) => f.error)) {
+    notices.append(notice('error',
+      `${file.name} could not be read: ${file.error}`,
+      'Nothing from this file is included below.'));
+  }
+  if (totals.truncated) {
+    const cut = files.filter((f) => f.truncated).map((f) => f.name).join(', ');
+    notices.append(notice('',
+      `Truncated: ${cut}`,
+      'The archive ends mid-stream, which is normal for a file that is still being written. ' +
+      'Everything before the cut is included. A partial zstd block at the very end (up to 128 kB) ' +
+      'cannot be decoded even in principle.'));
+  }
+  if (totals.decodeErrors > 0) {
+    notices.append(notice('',
+      `${num(totals.decodeErrors)} record${totals.decodeErrors === 1 ? '' : 's'} could not be decoded`,
+      'They were skipped; everything around them was read normally.'));
+  }
+  if (retention.full) {
+    notices.append(notice('',
+      `Showing the first ${num(retention.retained)} of ${num(totals.events)} events in the Events tab`,
+      `The ${bytes(retention.budgetBytes)} retention budget was reached. Every number on this page, ` +
+      'the timeline and the peer statistics still cover all ' + num(totals.events) + ' events.'));
+  }
+
+  const ratio = totals.compressedBytes
+    ? (totals.decompressedBytes / totals.compressedBytes).toFixed(2) + '×' : '—';
+  const throughput = elapsedSeconds
+    ? `${(totals.decompressedBytes / 1e6 / elapsedSeconds).toFixed(0)} MB/s` : '';
+
+  $('summary-cards').replaceChildren(
+    card('Events', num(totals.events), `${num(totals.kinds)} distinct kinds`),
+    card('Peers', num(totals.peers), 'seen in eBPF events'),
+    card('Time span', duration(totals.durationMs), utc(totals.firstTimestamp, false) + ' UTC'),
+    card('Archive size', bytes(totals.compressedBytes),
+      `${bytes(totals.decompressedBytes)} decompressed · ${ratio}`),
+    card('Decoded in', elapsedSeconds ? `${elapsedSeconds.toFixed(1)}s` : '—', throughput),
+  );
+
+  const table = $('files-table');
+  table.replaceChildren(
+    headRow(['File', 'Created (UTC)', 'Low data', 'Compressed', 'Decompressed', 'Events', 'Status'],
+            [false, false, false, true, true, true, false]),
+  );
+  const tbody = el('tbody');
+  for (const f of files) {
+    const status = f.error ? 'failed'
+      : f.truncated ? `truncated${f.trailingBytes ? ` (${f.trailingBytes} B tail)` : ''}`
+      : 'complete';
+    tbody.append(row([
+      [f.name, 'mono'],
+      [f.created ? utc(f.created * 1000, false) : '—', 'mono'],
+      [f.lowData === null ? 'unset' : String(f.lowData), ''],
+      [bytes(f.compressedBytes), 'num'],
+      [bytes(f.decompressedBytes), 'num'],
+      [num(f.events), 'num'],
+      [status, f.error ? 'danger' : ''],
+    ]));
+  }
+  table.append(tbody);
+
+  renderBreakdown();
+}
+
+function renderBreakdown() {
+  const { breakdown, totals } = state.summary;
+  const table = $('breakdown-table');
+  table.replaceChildren(
+    headRow(['Category', 'Group', 'Kind', 'Events', 'Share', ''],
+            [false, false, false, true, true, false]),
+  );
+  const max = breakdown.length ? breakdown[0].count : 1;
+  const tbody = el('tbody');
+  for (const b of breakdown) {
+    const tr = el('tr');
+    const swatch = el('span', 'swatch');
+    swatch.style.background = groupColor(b.group);
+    const first = el('td');
+    first.append(swatch, document.createTextNode(b.category));
+    tr.append(first);
+    tr.append(cell(b.group, ''), cell(b.kind, 'mono'),
+              cell(num(b.count), 'num'), cell(`${b.share.toFixed(2)}%`, 'num'));
+    const barCell = el('td');
+    const bar = el('span', 'sharebar');
+    bar.style.width = `${Math.max(2, (b.count / max) * 100)}%`;
+    bar.style.background = groupColor(b.group);
+    barCell.style.width = '160px';
+    barCell.append(bar);
+    tr.append(barCell);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  $('events-count').textContent = `${num(totals.events)} events`;
+}
+
+function groupColor(groupName) {
+  const groups = state.timeline?.groups ?? GROUP_ORDER;
+  const index = groups.indexOf(groupName);
+  return seriesColor(index < 0 ? 0 : index);
+}
+const GROUP_ORDER = ['message', 'connection', 'mempool', 'validation', 'rpc', 'p2p', 'log', 'ipc'];
+
+/* ----------------------------------------------------------------- timeline */
+
+/**
+ * Stacked bars, one column per time bin, one segment per event group.
+ *
+ * Bin count is chosen from the pixel width so every bar is wide enough to carry
+ * a 2px gap: asking for more bins than the chart can draw would just alias them
+ * together.
+ */
+function drawTimeline() {
+  const canvas = $('timeline');
+  const wrap = canvas.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = wrap.clientWidth;
+  const cssHeight = 320;
+  canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
+  canvas.height = Math.floor(cssHeight * dpr);
+  canvas.style.height = `${cssHeight}px`;
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const padding = { top: 12, right: 8, bottom: 28, left: 62 };
+  const plotWidth = Math.max(10, cssWidth - padding.left - padding.right);
+  const plotHeight = cssHeight - padding.top - padding.bottom;
+
+  const BAR_PITCH = 5; // 3px of fill + a 2px surface gap
+  const wanted = Math.max(1, Math.floor(plotWidth / BAR_PITCH));
+  state.timeline = JSON.parse(state.session.timeline(wanted));
+  const { series, groups, startMs, binMs, count } = state.timeline;
+
+  renderLegend();
+  if (!count) {
+    ctx.fillStyle = cssVar('--text-muted');
+    ctx.font = `13px ${cssVar('--sans')}`;
+    ctx.fillText('No events to plot', padding.left, padding.top + 20);
+    return;
+  }
+
+  const visible = groups.map((g) => !state.hiddenGroups.has(g));
+  const totals = [];
+  for (let i = 0; i < count; i++) {
+    let sum = 0;
+    for (let g = 0; g < series.length; g++) if (visible[g]) sum += series[g][i];
+    totals.push(sum);
+  }
+  const peak = Math.max(1, ...totals);
+
+  const barWidth = Math.max(1, plotWidth / count - (plotWidth / count > 3 ? 2 : 0));
+  const x = (i) => padding.left + (i * plotWidth) / count;
+  const y = (v) => padding.top + plotHeight - (v / peak) * plotHeight;
+
+  // Recessive gridlines and y labels.
+  ctx.strokeStyle = cssVar('--border');
+  ctx.fillStyle = cssVar('--text-muted');
+  ctx.font = `11px ${cssVar('--mono')}`;
+  ctx.lineWidth = 1;
+  for (let t = 0; t <= 4; t++) {
+    const value = (peak / 4) * t;
+    const py = Math.round(y(value)) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, py);
+    ctx.lineTo(padding.left + plotWidth, py);
+    ctx.stroke();
+    ctx.textAlign = 'right';
+    ctx.fillText(compactNumber(value), padding.left - 8, py + 4);
+  }
+
+  // Stacked bars, drawn bottom-up.
+  for (let i = 0; i < count; i++) {
+    let acc = 0;
+    for (let g = 0; g < series.length; g++) {
+      if (!visible[g]) continue;
+      const value = series[g][i];
+      if (!value) continue;
+      const top = y(acc + value);
+      const bottom = y(acc);
+      // A 2px separator between stacked segments, but only where the segment is
+      // tall enough to survive losing it.
+      const height = Math.max(1, bottom - top - (bottom - top > 3 ? 2 : 0));
+      ctx.fillStyle = seriesColor(g);
+      ctx.fillRect(x(i), top, barWidth, height);
+      acc += value;
+    }
+  }
+
+  // Time axis: a few labelled ticks.
+  ctx.fillStyle = cssVar('--text-muted');
+  ctx.font = `11px ${cssVar('--mono')}`;
+  const ticks = Math.max(2, Math.min(6, Math.floor(plotWidth / 130)));
+  for (let t = 0; t <= ticks; t++) {
+    const i = Math.round((count - 1) * (t / ticks));
+    const label = utc(Number(startMs) + i * Number(binMs), false).slice(11);
+    ctx.textAlign = t === 0 ? 'left' : t === ticks ? 'right' : 'center';
+    ctx.fillText(label, x(i) + (t === 0 ? 0 : barWidth / 2), cssHeight - 10);
+  }
+
+  // Brushed range overlay.
+  if (state.filter.timeFrom !== null && state.filter.timeTo !== null) {
+    const toIndex = (ms) => (Number(ms) - Number(startMs)) / Number(binMs);
+    const x0 = x(Math.max(0, toIndex(state.filter.timeFrom)));
+    const x1 = x(Math.min(count, toIndex(state.filter.timeTo)));
+    ctx.fillStyle = cssVar('--accent');
+    ctx.globalAlpha = 0.14;
+    ctx.fillRect(x0, padding.top, Math.max(1, x1 - x0), plotHeight);
+    ctx.globalAlpha = 1;
+  }
+
+  canvas._plot = { padding, plotWidth, plotHeight, count, startMs, binMs, series, groups, visible, x };
+}
+
+function compactNumber(v) {
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}k`;
+  return String(Math.round(v));
+}
+
+/**
+ * Legend doubles as the direct-label layer: every group is named and carries its
+ * total, so identity never rests on colour alone.
+ */
+function renderLegend() {
+  const legend = $('timeline-legend');
+  legend.replaceChildren();
+  if (!state.timeline) return;
+  const { groups, series } = state.timeline;
+  groups.forEach((group, i) => {
+    const total = series[i].reduce((a, b) => a + b, 0);
+    if (!total && !state.hiddenGroups.has(group)) return; // absent groups add noise
+    const item = el('span', 'item' + (state.hiddenGroups.has(group) ? ' off' : ''));
+    const swatch = el('span', 'swatch');
+    swatch.style.background = seriesColor(i);
+    item.append(swatch, document.createTextNode(`${group}${NBSP}`), el('b', null, num(total)));
+    item.style.cursor = 'pointer';
+    item.title = 'Click to show or hide this group';
+    item.addEventListener('click', () => {
+      state.hiddenGroups.has(group) ? state.hiddenGroups.delete(group) : state.hiddenGroups.add(group);
+      drawTimeline();
+    });
+    legend.append(item);
+  });
+}
+
+function setupTimelineInteraction() {
+  const canvas = $('timeline');
+  const tooltip = $('tooltip');
+  let brush = null;
+
+  const binAt = (event) => {
+    const plot = canvas._plot;
+    if (!plot) return null;
+    const rect = canvas.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    const i = Math.floor(((px - plot.padding.left) / plot.plotWidth) * plot.count);
+    return (i < 0 || i >= plot.count) ? null : i;
+  };
+  const timeAt = (i) => Number(canvas._plot.startMs) + i * Number(canvas._plot.binMs);
+
+  canvas.addEventListener('mousemove', (event) => {
+    const i = binAt(event);
+    const plot = canvas._plot;
+    if (i === null) { tooltip.hidden = true; return; }
+
+    if (brush) {
+      brush.to = i;
+      state.filter.timeFrom = timeAt(Math.min(brush.from, brush.to));
+      state.filter.timeTo = timeAt(Math.max(brush.from, brush.to) + 1) - 1;
+      drawTimeline();
+    }
+
+    const rows = plot.groups
+      .map((group, g) => ({ group, g, value: plot.series[g][i] }))
+      .filter((r) => r.value > 0 && plot.visible[r.g]);
+
+    tooltip.replaceChildren();
+    const time = el('div', 't-time',
+      `${utc(timeAt(i))} + ${duration(Number(plot.binMs))}`);
+    tooltip.append(time);
+    if (!rows.length) {
+      tooltip.append(el('div', 'muted', 'no events'));
+    } else {
+      const table = el('table');
+      for (const r of rows) {
+        const tr = el('tr');
+        const name = el('td');
+        const swatch = el('span', 'swatch');
+        swatch.style.background = seriesColor(r.g);
+        name.append(swatch, document.createTextNode(r.group));
+        tr.append(name, cell(num(r.value), 'v'));
+        table.append(tr);
+      }
+      const total = rows.reduce((a, r) => a + r.value, 0);
+      const totalRow = el('tr');
+      totalRow.append(el('td', null, 'total'), cell(num(total), 'v'));
+      totalRow.style.borderTop = `1px solid ${cssVar('--border')}`;
+      table.append(totalRow);
+      tooltip.append(table);
+    }
+
+    tooltip.hidden = false;
+    const wrap = canvas.parentElement.getBoundingClientRect();
+    const left = event.clientX - wrap.left + 14;
+    tooltip.style.left = `${Math.min(left, wrap.width - tooltip.offsetWidth - 8)}px`;
+    tooltip.style.top = `${Math.max(8, event.clientY - wrap.top - tooltip.offsetHeight - 12)}px`;
+  });
+
+  canvas.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+  canvas.addEventListener('mousedown', (event) => {
+    const i = binAt(event);
+    if (i === null) return;
+    brush = { from: i, to: i };
+    event.preventDefault();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!brush) return;
+    const dragged = brush.from !== brush.to;
+    brush = null;
+    if (!dragged) { clearTimeRange(); } else { onFilterChanged(); }
+    drawTimeline();
+  });
+
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (state.session) drawTimeline(); }, 120);
+  });
+}
+
+function clearTimeRange() {
+  state.filter.timeFrom = null;
+  state.filter.timeTo = null;
+  onFilterChanged();
+  drawTimeline();
+}
+
+/* -------------------------------------------------------------------- peers */
+
+function renderPeers() {
+  const total = state.summary.totals.peers;
+  $('peers-empty').hidden = total > 0;
+  $('peers-layout').hidden = total === 0;
+  if (!total) return;
+
+  const { key, desc } = state.peerSort;
+  // The peer table is small enough (thousands) to hold entirely.
+  const page = JSON.parse(state.session.peers(key, desc, 0, 5000));
+  state.peerRows = page.rows;
+  $('peers-count').textContent =
+    `${num(page.total)} peers${page.total > page.rows.length ? `, showing ${num(page.rows.length)}` : ''}`;
+  paintPeerRows();
+}
+
+function paintPeerRows() {
+  const needle = $('peer-search').value.trim().toLowerCase();
+  const rows = needle
+    ? state.peerRows.filter((p) =>
+        String(p.peerId).includes(needle) || (p.addr ?? '').toLowerCase().includes(needle))
+    : state.peerRows;
+
+  const columns = [
+    ['peerId', 'Peer', false], ['addr', 'Address', false], ['connType', 'Type', false],
+    ['firstSeen', 'First seen', false], ['duration', 'Duration', true],
+    ['messagesIn', 'In', true], ['messagesOut', 'Out', true],
+    ['bytesIn', 'Bytes in', true], ['bytesOut', 'Bytes out', true],
+  ];
+  const table = $('peers-table');
+  const thead = el('thead');
+  const tr = el('tr');
+  for (const [key, label, isNum] of columns) {
+    const th = el('th', `sortable${isNum ? ' num' : ''}`);
+    th.textContent = label + (state.peerSort.key === key ? (state.peerSort.desc ? ' ↓' : ' ↑') : '');
+    th.addEventListener('click', () => {
+      if (state.peerSort.key === key) state.peerSort.desc = !state.peerSort.desc;
+      else state.peerSort = { key, desc: true };
+      renderPeers();
+    });
+    tr.append(th);
+  }
+  thead.append(tr);
+
+  const tbody = el('tbody');
+  for (const p of rows.slice(0, 2000)) {
+    const row = el('tr');
+    if (state.selectedPeer === p.peerId) row.className = 'selected';
+    row.append(
+      cell(String(p.peerId), 'num'),
+      cell(p.addr ?? '—', 'mono'),
+      cell(p.connType ?? '—', ''),
+      cell(utc(p.firstSeen, false), 'mono'),
+      cell(duration(p.durationMs), 'num'),
+      cell(num(p.messagesIn), 'num'),
+      cell(num(p.messagesOut), 'num'),
+      cell(bytes(p.bytesIn), 'num'),
+      cell(bytes(p.bytesOut), 'num'),
+    );
+    row.addEventListener('click', () => selectPeer(p.peerId));
+    tbody.append(row);
+  }
+  table.replaceChildren(thead, tbody);
+}
+
+function selectPeer(peerId) {
+  state.selectedPeer = peerId;
+  paintPeerRows();
+  const detail = JSON.parse(state.session.peerDetail(peerId));
+  const panel = $('peer-detail');
+  panel.replaceChildren(el('h3', null, `Peer ${peerId}`));
+
+  if (!detail.found) {
+    panel.append(el('p', 'muted small', 'This peer is not in the archive.'));
+    return;
+  }
+
+  const facts = el('table');
+  const factRows = [
+    ['Address', detail.addr ?? 'not seen'],
+    ['Connection type', detail.connType ?? 'unknown'],
+    ['Network', detail.network ?? 'unknown'],
+    ['First seen', `${utc(detail.firstSeen)} UTC`],
+    ['Last seen', `${utc(detail.lastSeen)} UTC`],
+    ['Observed for', duration(detail.durationMs)],
+    ['Messages', `${num(detail.messagesIn)} in · ${num(detail.messagesOut)} out`],
+    ['Bytes', `${bytes(detail.bytesIn)} in · ${bytes(detail.bytesOut)} out`],
+  ];
+  for (const [k, v] of factRows) {
+    const tr = el('tr');
+    tr.append(cell(k, 'muted'), cell(String(v), 'mono'));
+    facts.append(tr);
+  }
+  panel.append(facts);
+
+  if (detail.commands.length) {
+    panel.append(el('h3', null, 'Messages by command'));
+    const table = el('table');
+    table.append(headRow(['Command', 'In', 'Out', 'Bytes'], [false, true, true, true]));
+    const tbody = el('tbody');
+    for (const c of detail.commands) {
+      const tr = el('tr');
+      tr.append(cell(c.command, 'mono'), cell(num(c.inbound), 'num'),
+                cell(num(c.outbound), 'num'),
+                cell(bytes(c.inboundBytes + c.outboundBytes), 'num'));
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    panel.append(table);
+  }
+
+  if (detail.lifecycle.length) {
+    panel.append(el('h3', null, 'Connection lifecycle'));
+    const table = el('table');
+    const tbody = el('tbody');
+    for (const e of detail.lifecycle) {
+      const tr = el('tr');
+      const extra = e.message ? e.message
+        : e.timeEstablished !== null && e.timeEstablished !== undefined
+          ? `established ${duration(Number(e.timeEstablished) * 1000)}`
+          : e.existingConnections !== null && e.existingConnections !== undefined
+            ? `${num(e.existingConnections)} existing connections` : '';
+      tr.append(cell(utc(e.timestamp), 'mono'), cell(e.kind, ''), cell(extra, 'muted small'));
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    panel.append(table);
+  }
+
+  const jump = el('button', 'btn', `Show this peer's events`);
+  jump.style.marginTop = '12px';
+  jump.addEventListener('click', () => {
+    state.filter.peerId = peerId;
+    onFilterChanged();
+    showTab('events');
+  });
+  panel.append(jump);
+}
+
+/* ------------------------------------------------------------------- events */
+
+const ROW_HEIGHT = 26;
+
+function buildFilterOptions() {
+  const groups = [...new Set(state.summary.breakdown.map((b) => b.group))];
+  const groupSelect = $('filter-group');
+  groupSelect.replaceChildren(new Option('All groups', ''));
+  for (const g of groups) groupSelect.append(new Option(g, g));
+
+  const kindSelect = $('filter-kind');
+  kindSelect.replaceChildren(new Option('All kinds', ''));
+  for (const b of state.summary.breakdown) {
+    kindSelect.append(new Option(`${b.kind} (${num(b.count)})`, String(b.id)));
+  }
+}
+
+function resetEventsView() {
+  const retention = state.summary.retention;
+  const notice_ = $('events-notice');
+  notice_.replaceChildren();
+  if (retention.full) {
+    notice_.append(notice('',
+      `Showing the first ${num(retention.retained)} of ${num(state.summary.totals.events)} events`,
+      `The ${bytes(retention.budgetBytes)} retention budget was reached while loading. ` +
+      'Raise it in the header and reload the archive to keep more.'));
+  }
+  $('events-viewport').scrollTop = 0;
+  refreshEvents();
+}
+
+function onFilterChanged() {
+  renderChips();
+  $('events-viewport').scrollTop = 0;
+  refreshEvents();
+}
+
+function renderChips() {
+  const chips = $('filter-chips');
+  chips.replaceChildren();
+  if (state.filter.peerId !== null) {
+    chips.append(chip(`peer ${state.filter.peerId}`, () => {
+      state.filter.peerId = null; onFilterChanged();
+    }));
+  }
+  if (state.filter.timeFrom !== null) {
+    chips.append(chip(
+      `${utc(state.filter.timeFrom, false)} → ${utc(state.filter.timeTo, false)}`,
+      () => { clearTimeRange(); }));
+  }
+}
+
+function currentFilter() {
+  const f = state.filter;
+  return JSON.stringify({
+    groups: f.groups, kinds: f.kinds,
+    peerId: f.peerId, timeFrom: f.timeFrom, timeTo: f.timeTo, text: f.text,
+  });
+}
+
+let pendingFrame = null;
+function refreshEvents() {
+  if (pendingFrame) cancelAnimationFrame(pendingFrame);
+  pendingFrame = requestAnimationFrame(() => { pendingFrame = null; paintEvents(); });
+}
+
+function paintEvents() {
+  if (!state.session) return;
+  const viewport = $('events-viewport');
+  const first = Math.max(0, Math.floor(viewport.scrollTop / ROW_HEIGHT) - 6);
+  const visible = Math.ceil(viewport.clientHeight / ROW_HEIGHT) + 12;
+
+  let page;
+  try {
+    page = JSON.parse(state.session.query(currentFilter(), first, visible));
+  } catch (error) {
+    console.error(error);
+    return;
+  }
+  state.eventTotal = page.total;
+
+  $('events-spacer').style.height = `${page.total * ROW_HEIGHT}px`;
+  $('events-rows').style.transform = `translateY(${first * ROW_HEIGHT}px)`;
+  $('events-count').textContent = `${num(page.total)} events match`;
+
+  const rows = page.rows.map((r) => {
+    const row = el('div', 'erow' + (state.selectedEvent === r.index ? ' selected' : ''));
+    const direction = r.inbound === null || r.inbound === undefined ? '' : (r.inbound ? '←' : '→');
+    row.append(
+      el('span', 'm dim', String(r.index)),
+      el('span', 'm', utc(r.timestamp)),
+      el('span', 'm', `${direction}${direction ? NBSP : ''}${r.kind ?? '?'}`),
+      el('span', 'm dim', r.peerId === null || r.peerId === undefined ? '—' : String(r.peerId)),
+      el('span', 'm dim', r.addr ?? '—'),
+      el('span', 'r dim', r.size ? bytes(r.size) : '—'),
+    );
+    row.addEventListener('click', () => selectEvent(r.index));
+    return row;
+  });
+  $('events-rows').replaceChildren(...rows);
+}
+
+function selectEvent(index) {
+  state.selectedEvent = index;
+  paintEvents();
+  const panel = $('inspector');
+  panel.replaceChildren(el('h3', null, `Event ${index}`));
+  try {
+    const decoded = JSON.parse(state.session.eventJson(index));
+    const pre = el('pre', 'json');
+    pre.append(...jsonNodes(decoded, 0));
+    panel.append(pre);
+  } catch (error) {
+    panel.append(el('p', 'muted small', String(error.message ?? error)));
+  }
+}
+
+/**
+ * Renders a decoded event as syntax-coloured JSON. Byte fields already arrive as
+ * hex strings from the inspector, so hashes and payloads read normally.
+ */
+function jsonNodes(value, depth) {
+  const pad = '  '.repeat(depth);
+  const padInner = '  '.repeat(depth + 1);
+  if (value === null) return [el('span', 'null', 'null')];
+  if (Array.isArray(value)) {
+    if (!value.length) return [document.createTextNode('[]')];
+    const out = [document.createTextNode('[\n')];
+    value.forEach((item, i) => {
+      out.push(document.createTextNode(padInner), ...jsonNodes(item, depth + 1),
+               document.createTextNode(i < value.length - 1 ? ',\n' : '\n'));
+    });
+    out.push(document.createTextNode(`${pad}]`));
+    return out;
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (!keys.length) return [document.createTextNode('{}')];
+    const out = [document.createTextNode('{\n')];
+    keys.forEach((key, i) => {
+      out.push(document.createTextNode(padInner), el('span', 'k', key),
+               document.createTextNode(': '), ...jsonNodes(value[key], depth + 1),
+               document.createTextNode(i < keys.length - 1 ? ',\n' : '\n'));
+    });
+    out.push(document.createTextNode(`${pad}}`));
+    return out;
+  }
+  if (typeof value === 'string') return [el('span', 's', JSON.stringify(value))];
+  if (typeof value === 'boolean') return [el('span', 'b', String(value))];
+  return [el('span', 'n', String(value))];
+}
+
+/* =============================================================== components */
+
+function card(label, value, note) {
+  const node = el('div', 'card');
+  node.append(el('div', 'label', label), el('div', 'value', value));
+  if (note) node.append(el('div', 'note', note));
+  return node;
+}
+
+function cell(text, cls) {
+  const td = el('td', cls);
+  td.textContent = text;
+  return td;
+}
+
+function row(cells) {
+  const tr = el('tr');
+  for (const [text, cls] of cells) tr.append(cell(text, cls));
+  return tr;
+}
+
+function headRow(labels, numeric) {
+  const thead = el('thead');
+  const tr = el('tr');
+  labels.forEach((label, i) => {
+    const th = el('th', numeric[i] ? 'num' : null);
+    th.textContent = label;
+    tr.append(th);
+  });
+  thead.append(tr);
+  return thead;
+}
+
+function notice(kind, title, detail) {
+  const node = el('div', `notice${kind ? ' ' + kind : ''}`);
+  node.append(el('strong', null, title));
+  if (detail) node.append(document.createTextNode(' ' + detail));
+  return node;
+}
+
+function chip(label, onRemove) {
+  const node = el('span', 'chip');
+  node.append(document.createTextNode(label));
+  const button = el('button', null, '×');
+  button.title = 'Remove this filter';
+  button.addEventListener('click', onRemove);
+  node.append(button);
+  return node;
+}
+
+/* ===================================================================== tabs */
+
+function showTab(name) {
+  state.tab = name;
+  for (const button of document.querySelectorAll('nav.tabs button')) {
+    button.setAttribute('aria-selected', String(button.dataset.tab === name));
+  }
+  for (const tab of ['summary', 'timeline', 'peers', 'events']) {
+    $(`tab-${tab}`).hidden = tab !== name;
+  }
+  // The canvas has no size while hidden, so it must be drawn on reveal.
+  if (name === 'timeline' && state.session) drawTimeline();
+  if (name === 'events' && state.session) refreshEvents();
+}
+
+/* ==================================================================== setup */
+
+function setupEvents() {
+  $('pick').addEventListener('click', () => $('file').click());
+  $('pick2').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', (e) => {
+    if (e.target.files.length) loadFiles([...e.target.files]);
+    e.target.value = '';
+  });
+  $('reset').addEventListener('click', () => {
+    state.session = null;
+    state.filter = { groups: [], kinds: [], peerId: null, timeFrom: null, timeTo: null, text: '' };
+    state.hiddenGroups.clear();
+    $('app').hidden = true;
+    $('loading').hidden = true;
+    $('dropzone').hidden = false;
+    $('reset').hidden = true;
+  });
+
+  for (const button of document.querySelectorAll('nav.tabs button')) {
+    button.addEventListener('click', () => showTab(button.dataset.tab));
+  }
+
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    if (++dragDepth === 1) { $('drop-overlay').hidden = false; document.body.classList.add('dragging'); }
+  });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('dragleave', () => {
+    if (--dragDepth <= 0) { dragDepth = 0; $('drop-overlay').hidden = true; document.body.classList.remove('dragging'); }
+  });
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    $('drop-overlay').hidden = true;
+    document.body.classList.remove('dragging');
+    if (e.dataTransfer?.files?.length) loadFiles([...e.dataTransfer.files]);
+  });
+
+  $('filter-group').addEventListener('change', (e) => {
+    state.filter.groups = e.target.value ? [e.target.value] : [];
+    onFilterChanged();
+  });
+  $('filter-kind').addEventListener('change', (e) => {
+    state.filter.kinds = e.target.value ? [Number(e.target.value)] : [];
+    onFilterChanged();
+  });
+  let textTimer;
+  $('filter-text').addEventListener('input', (e) => {
+    clearTimeout(textTimer);
+    textTimer = setTimeout(() => { state.filter.text = e.target.value.trim(); onFilterChanged(); }, 180);
+  });
+  $('peer-search').addEventListener('input', () => paintPeerRows());
+  $('events-viewport').addEventListener('scroll', refreshEvents, { passive: true });
+
+  setupTimelineInteraction();
+}
+
+(async function main() {
+  setupEvents();
+  try {
+    await init();
+  } catch (error) {
+    $('dropzone').replaceChildren(
+      el('h2', null, 'Could not load the WebAssembly module'),
+      el('p', null, String(error.message ?? error)),
+      el('p', 'small muted',
+        'The page must be served over HTTP — modules and wasm cannot be fetched from a file:// URL. ' +
+        'Try ./build.sh --serve'),
+    );
+  }
+})();
+</script>
+</body>
+</html>

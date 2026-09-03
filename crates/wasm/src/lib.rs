@@ -1,1 +1,126 @@
-//! placeholder
+//! The wasm-bindgen boundary for the archive viewer.
+//!
+//! This is deliberately thin: all decoding, aggregation and view logic lives in
+//! `archive-viewer-core`, where it can be tested natively. Everything crossing
+//! into JavaScript is a JSON string, which the page parses. The payloads are
+//! small — a page of rows, a summary object — so this costs little and keeps the
+//! JavaScript free of generated bindings.
+
+use archive_viewer_core::analysis::Analysis;
+use archive_viewer_core::inspect::{self, Schema};
+use archive_viewer_core::view::{self, Filter, QueryCache};
+use wasm_bindgen::prelude::*;
+
+/// Default retention budget: 1 GiB.
+const DEFAULT_BUDGET: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// wasm32 has a 4 GiB address space, and the decoder and browser need room too.
+const MAX_BUDGET: f64 = 3.0 * 1024.0 * 1024.0 * 1024.0;
+
+/// One viewing session. Several rotated archive files can be fed in and are
+/// reported as one continuous archive.
+#[wasm_bindgen]
+pub struct Session {
+    analysis: Analysis,
+    cache: QueryCache,
+    schema: Schema,
+}
+
+#[wasm_bindgen]
+impl Session {
+    /// `budget_bytes` caps how much raw event data is retained for the event
+    /// table and inspector. Aggregates always cover every event regardless.
+    #[wasm_bindgen(constructor)]
+    pub fn new(budget_bytes: Option<f64>) -> Result<Session, JsError> {
+        #[cfg(feature = "dev-panics")]
+        console_error_panic_hook::set_once();
+
+        let budget = budget_bytes
+            .unwrap_or(DEFAULT_BUDGET)
+            .clamp(0.0, MAX_BUDGET);
+        let schema = Schema::new().map_err(|e| JsError::new(&e))?;
+        Ok(Session {
+            analysis: Analysis::new(budget as u64),
+            cache: QueryCache::new(),
+            schema,
+        })
+    }
+
+    /// Start reading a file. Any file still open is finished first.
+    #[wasm_bindgen(js_name = beginFile)]
+    pub fn begin_file(&mut self, name: &str, size: f64) {
+        self.analysis
+            .begin_file(name.to_string(), size.max(0.0) as u64);
+    }
+
+    /// Feed the next chunk of the current file.
+    ///
+    /// A decoding error means the file is not a peer-observer archive (or is
+    /// corrupt); it is recorded against that file and the session stays usable.
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), JsError> {
+        self.analysis
+            .push(chunk)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Finish the current file.
+    #[wasm_bindgen(js_name = endFile)]
+    pub fn end_file(&mut self) {
+        self.analysis.end_file();
+    }
+
+    /// Counters for the progress display while loading.
+    pub fn progress(&self) -> String {
+        view::progress(&self.analysis).to_string()
+    }
+
+    /// Totals, per-file detail and the event breakdown.
+    pub fn summary(&self) -> String {
+        view::summary(&self.analysis).to_string()
+    }
+
+    /// Per-group event counts over time, downsampled to at most `bins` columns.
+    pub fn timeline(&self, bins: u32) -> String {
+        view::timeline(&self.analysis, bins as usize).to_string()
+    }
+
+    /// A page of the peer table.
+    pub fn peers(&self, sort: &str, descending: bool, offset: u32, limit: u32) -> String {
+        view::peers(
+            &self.analysis,
+            sort,
+            descending,
+            offset as usize,
+            limit as usize,
+        )
+        .to_string()
+    }
+
+    /// One peer in full.
+    #[wasm_bindgen(js_name = peerDetail)]
+    pub fn peer_detail(&self, peer_id: f64) -> String {
+        view::peer_detail(&self.analysis, peer_id.max(0.0) as u64).to_string()
+    }
+
+    /// A page of the raw event table. `filter_json` is the UI's filter object.
+    pub fn query(&mut self, filter_json: &str, offset: u32, limit: u32) -> Result<String, JsError> {
+        let filter: Filter = serde_json::from_str(filter_json)
+            .map_err(|e| JsError::new(&format!("bad filter: {e}")))?;
+        let result = view::query(
+            &self.analysis,
+            &mut self.cache,
+            &filter,
+            offset as usize,
+            limit as usize,
+        );
+        Ok(result.to_string())
+    }
+
+    /// The full decoded contents of one retained event, for the inspector.
+    #[wasm_bindgen(js_name = eventJson)]
+    pub fn event_json(&self, index: u32) -> Result<String, JsError> {
+        inspect::event_json(&self.analysis, &self.schema, index)
+            .map(|value| value.to_string())
+            .map_err(|e| JsError::new(&e))
+    }
+}
