@@ -217,13 +217,12 @@ canvas { display: block; width: 100%; }
 #seq .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
 #seq .note { fill: var(--panel-2); stroke: var(--rule-2); }
 #seq .notetext { fill: var(--ink-2); font-size: 10px; }
-.pchip {
-  display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
-  font-size: 12px; background: var(--panel-2); border: 1px solid var(--rule);
-  border-radius: 3px; padding: 1px 4px 1px 8px;
-}
-.pchip button { border: none; background: none; cursor: pointer; color: var(--ink-3); padding: 0 3px; }
-.pchip button:hover { color: var(--bad); }
+/* Removing a lifeline happens on the lifeline's own header. */
+#seq .rm { cursor: pointer; }
+#seq .rmhit { fill: transparent; }
+#seq .rmx { fill: var(--ink-3); font-size: 14px; font-family: var(--sans); }
+#seq .rm:hover .rmhit { fill: var(--panel); stroke: var(--rule-2); }
+#seq .rm:hover .rmx { fill: var(--bad); }
 
 /* -------------------------------------------------------------- start/load */
 #start { max-width: 620px; margin: 8vh auto; text-align: center; }
@@ -383,8 +382,6 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <div id="tab-sequence" hidden>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
         <span id="seq-back"></span>
-        <span class="dim">peers</span>
-        <span id="seq-peers" style="display:flex;gap:6px;flex-wrap:wrap"></span>
         <select id="seq-add"><option value="">add peer&hellip;</option></select>
         <span style="flex:1"></span>
         <button class="b" id="seq-prev">&larr; earlier</button>
@@ -647,7 +644,7 @@ function renderBar() {
   box.replaceChildren();
   for (const f of S.summary.files) {
     const chip = el('span', `fchip${f.error ? ' bad' : ''}`, f.name);
-    chip.title = f.error ?? `${bytes(f.compressedBytes)} · ${num(f.events)} events`;
+    chip.title = f.error ?? `${bytes(f.compressedBytes)}, ${num(f.events)} events`;
     box.append(chip);
   }
 }
@@ -900,7 +897,7 @@ function drawBoth() {
     (i) => color(i),
     (m) => {
       $('tl2-meta').textContent = m.count
-        ? `${S.group} events per ${dur(m.binMs)} · ${m.names.length} types` : '';
+        ? `${S.group} events per ${dur(m.binMs)}, ${m.names.length} types` : '';
       legend('tl2-legend', m, S.hidden.tl2, (i) => color(i), drawBoth);
     });
 }
@@ -1146,7 +1143,7 @@ function selectPeer(peerId) {
 
   if (d.lifecycle.length) {
     const shown = d.lifecycleTotal > d.lifecycle.length
-      ? `Connection lifecycle · last ${d.lifecycle.length} of ${num(d.lifecycleTotal)}`
+      ? `Connection lifecycle (last ${d.lifecycle.length} of ${num(d.lifecycleTotal)})`
       : `Connection lifecycle (${num(d.lifecycleTotal)})`;
     panel.append(sub(shown));
     const table = el('table');
@@ -1236,7 +1233,7 @@ async function showNetworks() {
     console.warn(error);
     S.netNames = {};
   }
-  $('pcount').textContent = `${num(page.total)} networks · ${num(page.peersCovered)} peers`;
+  $('pcount').textContent = `${num(page.total)} networks, ${num(page.peersCovered)} peers`;
   paintNetworks();
 }
 
@@ -1577,7 +1574,7 @@ function buildSeqPicker() {
   const rows = S.peerRows.length ? S.peerRows : (callJson('peers', 'events', true, 0, 200)?.rows ?? []);
   const busiest = [...rows].sort((a, b) => b.events - a.events).slice(0, 200);
   for (const p of busiest) {
-    select.append(new Option(`${p.peerId} · ${p.addr ?? '—'} (${num(p.events)})`, String(p.peerId)));
+    select.append(new Option(`${p.peerId}  ${p.addr ?? ""}  (${num(p.events)})`, String(p.peerId)));
   }
   // Start on the busiest peer so the tab is never empty on arrival.
   if (!S.seqPeers.length && busiest.length) S.seqPeers = [busiest[0].peerId];
@@ -1592,30 +1589,15 @@ function seqAddPeer(peerId) {
   drawSequence();
 }
 
-function renderSeqChips() {
-  renderBack('seq-back');
-  const box = $('seq-peers');
-  box.replaceChildren();
-  for (const id of S.seqPeers) {
-    const peer = S.peerRows.find((p) => p.peerId === id);
-    const n = el('span', 'pchip');
-    n.append(document.createTextNode(`${id}${peer?.addr ? ' · ' + peer.addr : ''}`));
-    const x = el('button', null, '×');
-    x.title = 'Remove this peer';
-    x.addEventListener('click', () => {
-      S.seqPeers = S.seqPeers.filter((p) => p !== id);
-      S.seqOffset = 0;
-      drawSequence();
-    });
-    n.append(x);
-    box.append(n);
-  }
-  if (!S.seqPeers.length) box.append(el('span', 'dim', 'none selected'));
+function seqRemovePeer(peerId) {
+  S.seqPeers = S.seqPeers.filter((p) => p !== peerId);
+  S.seqOffset = 0;
+  drawSequence();
 }
 
 function drawSequence() {
   if (!S.session || S.dead) return;
-  renderSeqChips();
+  renderBack('seq-back');
 
   const node = $('seq');
   node.replaceChildren();
@@ -1697,8 +1679,27 @@ function drawSequence() {
     node.append(t);
     if (head.sub) {
       const s = svg('text', { class: 'headsub', x, y: 34, 'text-anchor': 'middle' });
-      s.textContent = head.sub.length > 30 ? head.sub.slice(0, 29) + '…' : head.sub;
+      s.textContent = head.sub.length > 26 ? head.sub.slice(0, 25) + '…' : head.sub;
       node.append(s);
+    }
+    // Remove a lifeline from its own header, rather than from a separate list
+    // of chips above the diagram. Lane 0 is this node, which cannot be removed.
+    if (i > 0) {
+      const cx = x + w / 2 - 11;
+      const cy = 22;
+      const rm = svg('g', { class: 'rm' });
+      rm.append(svg('circle', { class: 'rmhit', cx, cy, r: 9 }));
+      const cross = svg('text', { class: 'rmx', x: cx, y: cy + 4, 'text-anchor': 'middle' });
+      cross.textContent = '×';
+      rm.append(cross);
+      const tip = svg('title');
+      tip.textContent = `Remove peer ${lanes[i - 1]} from the diagram`;
+      rm.append(tip);
+      rm.addEventListener('click', (event) => {
+        event.stopPropagation();
+        seqRemovePeer(lanes[i - 1]);
+      });
+      node.append(rm);
     }
   });
 
@@ -1751,7 +1752,7 @@ function drawSequence() {
       const label = svg('text', {
         class: 'label', x: (from + to) / 2, y: y - 5, 'text-anchor': 'middle', fill: colour,
       });
-      label.textContent = r.size ? `${r.kind} · ${bytes(r.size)}` : r.kind ?? '';
+      label.textContent = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
       g.append(label);
     }
 
