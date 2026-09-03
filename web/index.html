@@ -194,6 +194,37 @@ canvas { display: block; width: 100%; }
 .json .b { color: var(--s7); }
 .json .z { color: var(--ink-3); }
 
+/* -------------------------------------------------- segmented mode toggle */
+.seg { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 3px; overflow: hidden; }
+.seg button {
+  border: none; background: var(--panel); color: var(--ink-3);
+  padding: 2px 10px; cursor: pointer; font-size: 12px;
+}
+.seg button + button { border-left: 1px solid var(--rule-2); }
+.seg button.on { background: var(--accent); color: #fff; }
+
+/* ------------------------------------------------------ sequence diagram */
+#seq { display: block; font-family: var(--mono); }
+#seq .life { stroke: var(--rule); stroke-width: 1; }
+#seq .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
+#seq .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
+#seq .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
+#seq .arrow { stroke-width: 1.5; fill: none; }
+#seq .label { font-size: 11px; }
+#seq .gutter { fill: var(--ink-3); font-size: 10px; }
+#seq .hit { fill: transparent; cursor: pointer; }
+#seq .row:hover .hit { fill: var(--panel-2); }
+#seq .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
+#seq .note { fill: var(--panel-2); stroke: var(--rule-2); }
+#seq .notetext { fill: var(--ink-2); font-size: 10px; }
+.pchip {
+  display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
+  font-size: 12px; background: var(--panel-2); border: 1px solid var(--rule);
+  border-radius: 3px; padding: 1px 4px 1px 8px;
+}
+.pchip button { border: none; background: none; cursor: pointer; color: var(--ink-3); padding: 0 3px; }
+.pchip button:hover { color: var(--bad); }
+
 /* -------------------------------------------------------------- start/load */
 #start { max-width: 620px; margin: 8vh auto; text-align: center; }
 #start .box { border: 1px dashed var(--rule-2); border-radius: 4px; padding: 40px 24px; background: var(--panel); }
@@ -228,6 +259,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
   <button data-tab="overview" aria-selected="true">Overview</button>
   <button data-tab="peers" aria-selected="false">Peers</button>
   <button data-tab="events" aria-selected="false">Events</button>
+  <button data-tab="sequence" aria-selected="false">Sequence</button>
 </div>
 
 <main>
@@ -300,11 +332,14 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       <div class="side" id="peerwrap">
         <div class="p">
           <div class="h">
-            <span>Peers</span>
+            <span class="seg">
+              <button id="mode-peers" class="on">peers</button><button id="mode-nets">networks</button>
+            </span>
             <input type="search" id="psearch" placeholder="address or peer id">
             <span class="sp"></span>
             <span class="dim" id="pcount"></span>
           </div>
+          <div id="netnote"></div>
           <div class="scroll" style="max-height:calc(100vh - 150px)"><table id="tpeers"></table></div>
         </div>
         <div class="p" id="pdetail">
@@ -340,6 +375,34 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <div class="p" id="insp">
           <div class="h"><span>Event</span></div>
           <div class="body dim">Select an event to decode it in full.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ------------------------------------------------------- sequence -->
+    <div id="tab-sequence" hidden>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+        <span class="dim">peers</span>
+        <span id="seq-peers" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        <select id="seq-add"><option value="">add peer&hellip;</option></select>
+        <span style="flex:1"></span>
+        <button class="b" id="seq-prev">&larr; earlier</button>
+        <span class="dim mono" id="seq-pos"></span>
+        <button class="b" id="seq-next">later &rarr;</button>
+        <select id="seq-limit" title="Messages per screen">
+          <option value="100">100</option>
+          <option value="200" selected>200</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <div id="seq-note"></div>
+      <div class="side">
+        <div class="p" style="overflow:hidden">
+          <div id="seq-scroll" style="overflow:auto"><svg id="seq"></svg></div>
+        </div>
+        <div class="p" id="seq-insp">
+          <div class="h"><span>Message</span></div>
+          <div class="body dim">Select a message in the diagram to decode it.</div>
         </div>
       </div>
     </div>
@@ -423,9 +486,12 @@ const S = {
   charts: {},                       // canvas id -> last drawn model
   hidden: { tl: new Set(), tl2: new Set() },
   group: null,                      // group shown in the rate-by-type chart
-  filter: { groups: [], kinds: [], peerId: null, timeFrom: null, timeTo: null, text: '' },
+  filter: { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' },
   event: null, peer: null, returnToPeer: null,
   peerSort: { key: 'events', desc: true }, peerRows: [],
+  peerMode: 'peers',                // 'peers' or 'networks'
+  netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
+  seqPeers: [], seqOffset: 0, seqSelected: null,
   tab: 'overview',
 };
 
@@ -493,7 +559,9 @@ async function loadFiles(list) {
   S.session = new Session(Number($('budget').value));
   S.event = S.peer = S.returnToPeer = null;
   S.hidden.tl.clear(); S.hidden.tl2.clear();
-  S.filter = { groups: [], kinds: [], peerId: null, timeFrom: null, timeTo: null, text: '' };
+  S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
+  S.seqPeers = []; S.seqOffset = 0; S.seqSelected = null;
+  S.filter = { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' };
 
   const total = files.reduce((sum, f) => sum + f.size, 0);
   let done = 0;
@@ -566,6 +634,7 @@ function render(seconds) {
   renderBreakdown();
   renderFiles();
   buildFilters();
+  syncModeButtons();
   renderPeers();
   resetEvents();
   drawBoth();
@@ -1030,7 +1099,7 @@ function selectPeer(peerId) {
   const jump = el('button', 'b', 'Show this peer’s events →');
   jump.style.marginTop = '10px';
   jump.addEventListener('click', () => {
-    S.filter.peerId = peerId;
+    S.filter.peerIds = [peerId];
     S.returnToPeer = peerId;
     chips();
     refreshEvents();
@@ -1080,6 +1149,210 @@ function selectPeer(peerId) {
 const sub = (text) => { const h = el('div', 'h'); h.append(el('span', null, text)); return h; };
 const wrap = (table) => { const d = el('div', 'scroll'); d.style.maxHeight = '30vh'; d.append(table); return d; };
 
+/* --------------------------------------------------------------- networks */
+
+/**
+ * Grouping peers by autonomous system needs two things the base page does not
+ * carry: Bitcoin Core's asmap trie (~1.5 MB) and the ASN name tables (~2 MB
+ * compressed, as their own wasm module). Both load the first time this view is
+ * opened, so nobody else pays for them.
+ */
+let asinfoModule = null;
+async function ensureAsn() {
+  if (S.asnState === 'ready') return true;
+  if (S.asnState === 'loading') return false;
+  S.asnState = 'loading';
+  renderNetNote();
+  try {
+    if (!call('asmapLoaded')) {
+      const response = await fetch('./asmap.dat');
+      if (!response.ok) throw new Error(`asmap.dat: HTTP ${response.status}`);
+      call('loadAsmap', new Uint8Array(await response.arrayBuffer()));
+      if (S.dead) return false;
+    }
+    if (!asinfoModule) {
+      const mod = await import('./pkg/archive_viewer_asinfo.js');
+      await mod.default();
+      asinfoModule = mod;
+    }
+    S.asnState = 'ready';
+    return true;
+  } catch (error) {
+    S.asnState = String(error?.message ?? error);
+    renderNetNote();
+    return false;
+  }
+}
+
+function renderNetNote() {
+  const box = $('netnote');
+  box.replaceChildren();
+  if (S.peerMode !== 'networks') return;
+  if (S.asnState === 'loading') {
+    box.append(note('Loading the ASN database…',
+      'asmap trie and name tables, about 3 MB, once per visit.', 'info'));
+  } else if (S.asnState !== 'ready' && S.asnState !== 'idle') {
+    box.append(note('Networks are unavailable.',
+      `${S.asnState}. The page needs asmap.dat next to index.html; ./build.sh fetches it.`, 'bad'));
+  }
+}
+
+async function showNetworks() {
+  renderNetNote();
+  if (!(await ensureAsn())) {
+    $('tpeers').replaceChildren();
+    $('pcount').textContent = '';
+    return;
+  }
+  renderNetNote();
+
+  const page = callJson('networks', 0, 2000);
+  if (!page || !page.available) return;
+  S.netRows = page.rows;
+
+  // Name every AS on screen in one call rather than one per row.
+  const asns = page.rows.map((r) => r.asn).filter((a) => a !== null && a !== undefined);
+  try {
+    S.netNames = JSON.parse(asinfoModule.describeMany(JSON.stringify(asns)));
+  } catch (error) {
+    console.warn(error);
+    S.netNames = {};
+  }
+  $('pcount').textContent = `${num(page.total)} networks · ${num(page.peersCovered)} peers`;
+  paintNetworks();
+}
+
+const netKey = (r) => (r.asn === null || r.asn === undefined) ? r.label : `AS${r.asn}`;
+const netName = (r) => S.netNames[String(r.asn)] ?? null;
+
+function paintNetworks() {
+  const needle = $('psearch').value.trim().toLowerCase();
+  const rows = needle
+    ? S.netRows.filter((r) => {
+        const info = netName(r);
+        return String(r.asn ?? '').includes(needle)
+          || (info?.description ?? '').toLowerCase().includes(needle)
+          || (info?.handle ?? '').toLowerCase().includes(needle)
+          || (info?.country ?? '').toLowerCase().includes(needle)
+          || r.label.toLowerCase().includes(needle);
+      })
+    : S.netRows;
+
+  const total = S.netRows.reduce((a, r) => a + r.peers, 0);
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [label, cls] of [['network', ''], ['name', ''], ['cc', ''], ['peers', 'n'],
+                              ['share', 'n'], ['inbound', 'n'], ['evicted', 'n'],
+                              ['evict%', 'n'], ['messages', 'n'], ['bytes', 'n']]) {
+    hr.append(el('th', cls, label));
+  }
+  thead.append(hr);
+
+  const tbody = el('tbody');
+  for (const r of rows.slice(0, 1000)) {
+    const info = netName(r);
+    const tr = el('tr', S.netSelected === netKey(r) ? 'on' : null);
+    const ratio = r.evictionRatio;
+    const ratioCell = td(ratio == null ? '—' : `${(ratio * 100).toFixed(1)}%`, 'n');
+    // A whole AS being evicted nearly every time is the signature of a
+    // connection flood rather than of ordinary peers.
+    if (ratio != null && ratio > 0.9 && r.inbound > 50) ratioCell.style.color = 'var(--bad)';
+    tr.append(
+      td(r.asn == null ? r.label : `AS${r.asn}`, 'm'),
+      td(info?.description ?? (r.asn == null ? '' : 'not in the ASN tables'), ''),
+      td(info?.country ?? '', 'm dim'),
+      td(num(r.peers), 'n'),
+      td(`${(r.peers * 100 / Math.max(1, total)).toFixed(1)}%`, 'n'),
+      td(num(r.inbound), 'n'),
+      td(num(r.evicted), 'n'),
+      ratioCell,
+      td(num(r.messagesIn + r.messagesOut), 'n'),
+      td(bytes(r.bytesIn + r.bytesOut), 'n'),
+    );
+    tr.addEventListener('click', () => selectNetwork(r));
+    tbody.append(tr);
+  }
+  $('tpeers').replaceChildren(thead, tbody);
+}
+
+function selectNetwork(r) {
+  S.netSelected = netKey(r);
+  paintNetworks();
+
+  const info = netName(r);
+  const panel = $('pdetail');
+  const head = el('div', 'h');
+  head.append(el('span', null, netKey(r)));
+  panel.replaceChildren(head);
+
+  const body = el('div', 'body');
+  const facts = el('table');
+  for (const [k, v] of [
+    ['name', info?.description ?? (r.asn == null ? r.label : 'not in the ASN tables')],
+    ['handle', info?.handle ?? '—'],
+    ['country', info?.country ?? '—'],
+    ['peers', num(r.peers)],
+    ['messages', `${num(r.messagesIn)} in / ${num(r.messagesOut)} out`],
+    ['bytes', `${bytes(r.bytesIn)} in / ${bytes(r.bytesOut)} out`],
+    ['connections', `${num(r.inbound)} inbound, ${num(r.outbound)} outbound`],
+    ['evicted', r.evictionRatio == null
+      ? num(r.evicted) : `${num(r.evicted)} (${(r.evictionRatio * 100).toFixed(1)}% of inbound)`],
+    ['misbehaving', num(r.misbehaving)],
+    ['first seen', utc(r.firstSeen, false)],
+    ['last seen', utc(r.lastSeen, false)],
+  ]) {
+    const tr = el('tr');
+    tr.append(td(k, 'dim'), td(String(v), 'm'));
+    facts.append(tr);
+  }
+  body.append(facts);
+  panel.append(body);
+
+  const peers = callJson('networkPeers', r.asn == null ? -1 : r.asn, r.label, 200);
+  if (peers && peers.rows.length) {
+    panel.append(sub(`Busiest peers (${num(peers.rows.length)} of ${num(r.peers)})`));
+    const table = el('table');
+    const tbody = el('tbody');
+    for (const p of peers.rows) {
+      const tr = el('tr');
+      tr.append(td(String(p.peerId), 'n'), td(p.addr ?? '—', 'm'), td(num(p.events), 'n'));
+      tr.addEventListener('click', () => {
+        showPeerMode('peers');
+        selectPeer(p.peerId);
+      });
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    panel.append(wrap(table));
+  }
+}
+
+function syncModeButtons() {
+  $('mode-peers').classList.toggle('on', S.peerMode === 'peers');
+  $('mode-nets').classList.toggle('on', S.peerMode === 'networks');
+  $('psearch').placeholder = S.peerMode === 'peers' ? 'address or peer id' : 'ASN, name or country';
+}
+
+function showPeerMode(mode) {
+  S.peerMode = mode;
+  S.netSelected = null;
+  S.peer = null;
+  syncModeButtons();
+  $('psearch').value = '';
+  const panel = $('pdetail');
+  const head = el('div', 'h');
+  head.append(el('span', null, mode === 'peers' ? 'Peer detail' : 'Network detail'));
+  panel.replaceChildren(head, el('div', 'body dim',
+    mode === 'peers' ? 'Select a peer for its message mix and connection lifecycle.'
+                     : 'Select a network for its peers and connection behaviour.'));
+  if (mode === 'peers') {
+    renderNetNote();
+    renderPeers();
+  } else {
+    showNetworks();
+  }
+}
+
 /* ----------------------------------------------------------------- events */
 const ROW_H = 22;
 
@@ -1111,9 +1384,9 @@ function resetEvents() {
 function chips() {
   const box = $('fchips');
   box.replaceChildren();
-  if (S.filter.peerId !== null) {
-    box.append(chip(`peer ${S.filter.peerId}`, () => {
-      S.filter.peerId = null; chips(); refreshEvents();
+  if (S.filter.peerIds.length) {
+    box.append(chip(`peer ${S.filter.peerIds.join(", ")}`, () => {
+      S.filter.peerIds = []; chips(); refreshEvents();
     }));
   }
   if (S.filter.timeFrom !== null) {
@@ -1191,12 +1464,20 @@ function paintEvents() {
 function selectEvent(index) {
   S.event = index;
   paintEvents();
-  const panel = $('insp');
+  inspectInto('insp', index, `Event ${index}`);
+}
+
+/**
+ * Decode one retained event into a panel. Shared by the event table and the
+ * sequence diagram, which open the same inspector.
+ */
+function inspectInto(panelId, index, title) {
+  const panel = $(panelId);
   const head = el('div', 'h');
-  head.append(el('span', null, `Event ${index}`));
+  head.append(el('span', null, title));
   panel.replaceChildren(head);
   const body = el('div', 'body');
-  body.style.maxHeight = 'calc(100vh - 220px)';
+  body.style.maxHeight = 'calc(100vh - 240px)';
   body.style.overflow = 'auto';
   try {
     const decoded = callJson('eventJson', index);
@@ -1244,16 +1525,207 @@ function jsonNodes(value, depth) {
   return [el('span', 'n', String(value))];
 }
 
+/* ------------------------------------------------------- sequence diagram */
+
+const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24 };
+const SVGNS = 'http://www.w3.org/2000/svg';
+const svg = (tag, attrs = {}) => {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+  return n;
+};
+
+function seqLimit() {
+  return Number($('seq-limit').value);
+}
+
+/**
+ * Rebuild the peer picker from the peers actually in the archive, busiest first.
+ * A sequence diagram is only legible for a handful of lifelines, so peers are
+ * added explicitly rather than all at once.
+ */
+function buildSeqPicker() {
+  const select = $('seq-add');
+  select.replaceChildren(new Option('add peer…', ''));
+  const rows = S.peerRows.length ? S.peerRows : (callJson('peers', 'events', true, 0, 200)?.rows ?? []);
+  const busiest = [...rows].sort((a, b) => b.events - a.events).slice(0, 200);
+  for (const p of busiest) {
+    select.append(new Option(`${p.peerId} · ${p.addr ?? '—'} (${num(p.events)})`, String(p.peerId)));
+  }
+  // Start on the busiest peer so the tab is never empty on arrival.
+  if (!S.seqPeers.length && busiest.length) S.seqPeers = [busiest[0].peerId];
+}
+
+function seqAddPeer(peerId) {
+  if (S.seqPeers.includes(peerId)) return;
+  // Beyond a handful of lifelines the diagram stops being readable.
+  if (S.seqPeers.length >= 6) S.seqPeers.shift();
+  S.seqPeers.push(peerId);
+  S.seqOffset = 0;
+  drawSequence();
+}
+
+function renderSeqChips() {
+  const box = $('seq-peers');
+  box.replaceChildren();
+  for (const id of S.seqPeers) {
+    const peer = S.peerRows.find((p) => p.peerId === id);
+    const n = el('span', 'pchip');
+    n.append(document.createTextNode(`${id}${peer?.addr ? ' · ' + peer.addr : ''}`));
+    const x = el('button', null, '×');
+    x.title = 'Remove this peer';
+    x.addEventListener('click', () => {
+      S.seqPeers = S.seqPeers.filter((p) => p !== id);
+      S.seqOffset = 0;
+      drawSequence();
+    });
+    n.append(x);
+    box.append(n);
+  }
+  if (!S.seqPeers.length) box.append(el('span', 'dim', 'none selected'));
+}
+
+function drawSequence() {
+  if (!S.session || S.dead) return;
+  renderSeqChips();
+
+  const node = $('seq');
+  node.replaceChildren();
+  const note = $('seq-note');
+  note.replaceChildren();
+
+  if (!S.seqPeers.length) {
+    $('seq-pos').textContent = '';
+    note.append(el('div', 'msg info', 'Add a peer to draw its message exchange.'));
+    return;
+  }
+
+  // Messages and connection events for the chosen peers, in archive order,
+  // honouring the time range brushed on the overview.
+  const filter = {
+    groups: ['message', 'connection'],
+    kinds: [],
+    peerIds: S.seqPeers,
+    timeFrom: S.filter.timeFrom,
+    timeTo: S.filter.timeTo,
+    text: '',
+  };
+  const page = callJson('query', JSON.stringify(filter), S.seqOffset, seqLimit());
+  if (!page) return;
+  S.seqRows = page.rows;
+
+  const first = page.total ? S.seqOffset + 1 : 0;
+  $('seq-pos').textContent = `${num(first)}–${num(S.seqOffset + page.rows.length)} of ${num(page.total)}`;
+  $('seq-prev').disabled = S.seqOffset === 0;
+  $('seq-next').disabled = S.seqOffset + seqLimit() >= page.total;
+
+  if (!page.rows.length) {
+    note.append(el('div', 'msg info', 'No messages for these peers in the selected range.'));
+    node.setAttribute('height', 0);
+    return;
+  }
+
+  const lanes = S.seqPeers;
+  const width = SEQ.gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad;
+  const height = SEQ.top + page.rows.length * SEQ.row + SEQ.pad;
+  node.setAttribute('width', width);
+  node.setAttribute('height', height);
+  node.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  $('seq-scroll').style.maxHeight = 'calc(100vh - 190px)';
+
+  const laneX = (i) => SEQ.gutter + SEQ.lane * i + SEQ.lane / 2;
+  const nodeX = laneX(0);
+  const peerX = (peerId) => laneX(lanes.indexOf(peerId) + 1);
+
+  // Lifelines, with a header box each.
+  const heads = [{ title: 'this node', sub: 'Bitcoin Core' }].concat(
+    lanes.map((id) => {
+      const peer = S.peerRows.find((p) => p.peerId === id);
+      return { title: `peer ${id}`, sub: peer?.addr ?? '' };
+    }),
+  );
+  heads.forEach((head, i) => {
+    const x = laneX(i);
+    node.append(svg('line', { class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad }));
+    const w = SEQ.lane - 26;
+    node.append(svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 }));
+    const t = svg('text', { class: 'headtext', x, y: 22, 'text-anchor': 'middle' });
+    t.textContent = head.title;
+    node.append(t);
+    const s = svg('text', { class: 'headsub', x, y: 34, 'text-anchor': 'middle' });
+    s.textContent = head.sub.length > 30 ? head.sub.slice(0, 29) + '…' : head.sub;
+    node.append(s);
+  });
+
+  let previous = null;
+  page.rows.forEach((r, i) => {
+    const y = SEQ.top + i * SEQ.row + SEQ.row / 2;
+    const g = svg('g', { class: `row${S.seqSelected === r.index ? ' on' : ''}` });
+
+    g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
+
+    // Gutter: absolute time, and the gap since the previous message.
+    const time = svg('text', { class: 'gutter', x: 8, y: y + 3.5 });
+    time.textContent = utc(r.timestamp);
+    g.append(time);
+    if (previous !== null) {
+      const delta = svg('text', { class: 'gutter', x: SEQ.gutter - 12, y: y + 3.5, 'text-anchor': 'end' });
+      const gap = r.timestamp - previous;
+      delta.textContent = gap > 0 ? `+${dur(gap)}` : '';
+      g.append(delta);
+    }
+    previous = r.timestamp;
+
+    const px = peerX(r.peerId);
+    const colour = groupColor(r.group);
+
+    if (r.group === 'connection') {
+      // Lifecycle events are not an exchange, so they are a note on the peer's
+      // own lifeline rather than an arrow.
+      const w = 132;
+      g.append(svg('rect', { class: 'note', x: px - w / 2, y: y - 8, width: w, height: 16, rx: 2 }));
+      const t = svg('text', { class: 'notetext', x: px, y: y + 3.5, 'text-anchor': 'middle' });
+      t.textContent = r.kind ?? '';
+      g.append(t);
+    } else {
+      const inbound = r.inbound === true;
+      const from = inbound ? px : nodeX;
+      const to = inbound ? nodeX : px;
+      const dir = Math.sign(to - from) || 1;
+      const end = to - dir * 5;
+      g.append(svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: colour }));
+      g.append(svg('path', {
+        d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
+        fill: colour,
+      }));
+      const label = svg('text', {
+        class: 'label', x: (from + to) / 2, y: y - 5, 'text-anchor': 'middle', fill: colour,
+      });
+      label.textContent = r.size ? `${r.kind} · ${bytes(r.size)}` : r.kind ?? '';
+      g.append(label);
+    }
+
+    g.addEventListener('click', () => {
+      S.seqSelected = r.index;
+      drawSequence();
+      inspectInto('seq-insp', r.index, `Message ${r.index}`);
+    });
+    node.append(g);
+  });
+}
+
 /* ------------------------------------------------------------------- tabs */
 function showTab(name) {
   S.tab = name;
   for (const b of document.querySelectorAll('#tabs button')) {
     b.setAttribute('aria-selected', String(b.dataset.tab === name));
   }
-  for (const t of ['overview', 'peers', 'events']) $(`tab-${t}`).hidden = t !== name;
-  // Canvases have no width while hidden, so they must be drawn on reveal.
-  if (name === 'overview' && S.session && !S.dead) drawBoth();
-  if (name === 'events' && S.session && !S.dead) refreshEvents();
+  for (const t of ['overview', 'peers', 'events', 'sequence']) $(`tab-${t}`).hidden = t !== name;
+  // Canvas and SVG have no size while hidden, so they are drawn on reveal.
+  if (!S.session || S.dead) return;
+  if (name === 'overview') drawBoth();
+  if (name === 'events') refreshEvents();
+  if (name === 'sequence') { buildSeqPicker(); drawSequence(); }
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -1317,8 +1789,26 @@ function setup() {
       refreshEvents();
     }, 180);
   });
-  $('psearch').addEventListener('input', paintPeers);
+  $('psearch').addEventListener('input', () =>
+    S.peerMode === 'peers' ? paintPeers() : paintNetworks());
   $('eview').addEventListener('scroll', refreshEvents, { passive: true });
+
+  $('mode-peers').addEventListener('click', () => showPeerMode('peers'));
+  $('mode-nets').addEventListener('click', () => showPeerMode('networks'));
+
+  $('seq-add').addEventListener('change', (e) => {
+    if (e.target.value) seqAddPeer(Number(e.target.value));
+    e.target.value = '';
+  });
+  $('seq-prev').addEventListener('click', () => {
+    S.seqOffset = Math.max(0, S.seqOffset - seqLimit());
+    drawSequence();
+  });
+  $('seq-next').addEventListener('click', () => {
+    S.seqOffset += seqLimit();
+    drawSequence();
+  });
+  $('seq-limit').addEventListener('change', () => { S.seqOffset = 0; drawSequence(); });
 
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);

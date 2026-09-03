@@ -9,6 +9,7 @@
 use archive_viewer_core::analysis::Analysis;
 use archive_viewer_core::inspect::{self, Schema};
 use archive_viewer_core::view::{self, Filter, QueryCache};
+use asmap::Asmap;
 use wasm_bindgen::prelude::*;
 
 /// Default retention budget.
@@ -29,6 +30,8 @@ pub struct Session {
     analysis: Analysis,
     cache: QueryCache,
     schema: Schema,
+    /// Optional: enables grouping peers by autonomous system.
+    asmap: Option<Asmap>,
 }
 
 #[wasm_bindgen]
@@ -48,6 +51,7 @@ impl Session {
             analysis: Analysis::new(budget as u64),
             cache: QueryCache::new(),
             schema,
+            asmap: None,
         })
     }
 
@@ -135,6 +139,50 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// Load a Bitcoin Core asmap file, enabling the networks view.
+    ///
+    /// The page fetches this at runtime rather than embedding it: it is ~1.5 MB,
+    /// it is updated independently of this tool, and everything else works
+    /// without it.
+    #[wasm_bindgen(js_name = loadAsmap)]
+    pub fn load_asmap(&mut self, bytes: Vec<u8>) -> Result<(), JsError> {
+        let asmap = Asmap::from_bytes(bytes)
+            .map_err(|e| JsError::new(&format!("not a valid asmap file: {e}")))?;
+        self.asmap = Some(asmap);
+        Ok(())
+    }
+
+    /// Whether an asmap file has been loaded.
+    #[wasm_bindgen(js_name = asmapLoaded)]
+    pub fn asmap_loaded(&self) -> bool {
+        self.asmap.is_some()
+    }
+
+    /// Peers grouped by autonomous system, busiest first.
+    pub fn networks(&self, offset: u32, limit: u32) -> String {
+        view::networks(
+            &self.analysis,
+            self.asmap.as_ref(),
+            offset as usize,
+            limit as usize,
+        )
+        .to_string()
+    }
+
+    /// The peers making up one network. `asn` is negative for the buckets that
+    /// have no autonomous system, which `label` then distinguishes.
+    #[wasm_bindgen(js_name = networkPeers)]
+    pub fn network_peers(&self, asn: f64, label: &str, limit: u32) -> String {
+        let asn = (asn >= 0.0).then_some(asn as u32);
+        view::network_peers(
+            &self.analysis,
+            self.asmap.as_ref(),
+            asn,
+            label,
+            limit as usize,
+        )
+        .to_string()
+    }
     /// The full decoded contents of one retained event, for the inspector.
     #[wasm_bindgen(js_name = eventJson)]
     pub fn event_json(&self, index: u32) -> Result<String, JsError> {

@@ -5,3 +5,4 @@
 *.bin
 *.bin.zst
 *.zst
+/web/asmap.dat

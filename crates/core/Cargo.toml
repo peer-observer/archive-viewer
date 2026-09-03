@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+asmap.workspace = true
 prost.workspace = true
 prost-reflect.workspace = true
 ruzstd.workspace = true

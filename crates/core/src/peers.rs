@@ -21,6 +21,25 @@ pub enum LifecycleKind {
 }
 
 impl LifecycleKind {
+    /// Every kind, in a stable order, used to index the per-peer counters.
+    pub const ALL: [LifecycleKind; 5] = [
+        LifecycleKind::Inbound,
+        LifecycleKind::Outbound,
+        LifecycleKind::Closed,
+        LifecycleKind::InboundEvicted,
+        LifecycleKind::Misbehaving,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            LifecycleKind::Inbound => 0,
+            LifecycleKind::Outbound => 1,
+            LifecycleKind::Closed => 2,
+            LifecycleKind::InboundEvicted => 3,
+            LifecycleKind::Misbehaving => 4,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             LifecycleKind::Inbound => "inbound",
@@ -92,6 +111,9 @@ pub struct PeerStats {
     pub lifecycle: Vec<LifecycleEvent>,
     /// How many lifecycle events actually occurred, including those dropped.
     pub lifecycle_total: u64,
+    /// Exact count per lifecycle kind, indexed by [`LifecycleKind::index`].
+    /// The list above is capped, so this is the only exact per-kind source.
+    pub lifecycle_counts: [u32; 5],
 }
 
 impl PeerStats {
@@ -252,6 +274,7 @@ impl PeerTable {
             update_identity(peer, conn);
         }
         peer.lifecycle_total += 1;
+        peer.lifecycle_counts[kind.index()] += 1;
         if peer.lifecycle.len() == LIFECYCLE_CAP {
             peer.lifecycle.remove(0);
         }

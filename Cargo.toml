@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/wasm", "crates/cli"]
+members = ["crates/core", "crates/wasm", "crates/asinfo-wasm"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,8 @@ archive-viewer-core = { path = "crates/core" }
 prost = "0.14"
 prost-reflect = "0.16"
 prost-build = "0.14"
+asinfo = "0.1"
+asmap = "0.1"
 ruzstd = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -39,6 +39,51 @@ have to guess:
 - Peer ids are assigned by Bitcoin Core and are only unique within one node run,
   so an archive spanning a restart can reuse them.
 
+
+## Views
+
+**Overview** — totals, the event breakdown, all events over time, and one group
+broken down by type (the connection rate by inbound/outbound/closed/evicted).
+
+**Peers** — every peer with its message mix and connection lifecycle, or the same
+peers grouped by **network**. Grouping uses Bitcoin Core's own asmap trie, the
+IP-to-ASN mapping Core uses to bucket peers for eviction, so the viewer groups
+peers the way Core reasons about them. This matters: in one sample archive the
+peer list showed 158,450 addresses, and the network view showed that 99.1% of
+them were a single autonomous system with a 99.9% eviction rate. Grouping by IP
+prefix would have split that one actor across four buckets.
+
+**Events** — every retained event, filterable, with a full protobuf decode of any
+one you click.
+
+**Sequence** — a sequence diagram of the P2P exchange for up to six peers: one
+lifeline per peer, arrows for messages with direction and size, connection
+lifecycle events as notes, and the gap since the previous message in the gutter.
+A handshake reads directly off it:
+
+```
+06:18:39.503            <- version (123 B)
+06:18:39.504      +1ms  -> version (102 B)
+06:18:39.506      +2ms  -> wtxidrelay
+06:18:39.506      +0ms  -> sendaddrv2
+06:18:39.506      +0ms  -> verack
+06:18:39.625    +119ms  <- verack
+```
+
+This is peer-observer issue #397, done in the browser rather than by exporting to
+an external diagram tool.
+
+### The ASN database
+
+The networks view needs two things the rest of the page does not:
+[asmap](https://github.com/0xB10C/asmap) needs Bitcoin Core's trie (~1.5 MB,
+fetched by `build.sh` into `web/asmap.dat`), and
+[asinfo](https://github.com/0xB10C/asinfo) embeds AS names at compile time, which
+is around 4 MB — more than the entire rest of the viewer.
+
+So AS naming is its own WebAssembly module, and both it and the trie load only
+when the networks view is first opened. The main bundle stays at 0.36 MB
+gzipped; the ASN database costs about 3 MB, once, and only if you ask for it.
 ## Building
 
 Everything comes from the Nix dev shell:
@@ -55,16 +100,6 @@ HTTP — ES modules and WebAssembly cannot be fetched from a `file://` URL.
 
 If you cloned without submodules, the build will tell you to run
 `git submodule update --init`.
-
-### Native harness
-
-`crates/cli` runs the same decoding and aggregation without a browser, which is
-useful for checking an archive quickly or measuring throughput:
-
-```sh
-cargo run --release -p archive-viewer-cli -- stats path/to/archive.bin.zst
-cargo run --release -p archive-viewer-cli -- dump  path/to/archive.bin.zst > stream.bin
-```
 
 ### Tests
 
@@ -84,7 +119,7 @@ own.
 |---|---|
 | `crates/core` | decoding, classification, aggregation, JSON views; pure Rust, builds native and for wasm32 |
 | `crates/wasm` | the `wasm-bindgen` boundary — thin, everything crossing it is JSON |
-| `crates/cli` | native harness: `stats` and `dump` |
+| `crates/asinfo-wasm` | ASN name tables; a second module, loaded only for the networks view |
 | `web/index.html` | the whole UI: markup, styles and script in one file |
 | `peer-observer/` | git submodule, pinned; the protobuf schema is compiled from it |
 

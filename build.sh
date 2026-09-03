@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the wasm bundle into web/pkg/, and optionally serve the page.
+# Build the viewer's wasm bundles into web/pkg/, fetch the asmap data, and
+# optionally serve the page.
 #
 # Run inside the dev shell:  nix develop --command ./build.sh
 set -euo pipefail
@@ -8,6 +9,11 @@ cd "$(dirname "$0")"
 
 CRATE=archive-viewer-wasm
 WASM_NAME=archive_viewer_wasm
+# The ASN name tables are a separate module: asinfo embeds ~4 MB at compile
+# time, and the page loads it only when the networks view is opened.
+ASINFO_CRATE=archive-viewer-asinfo
+ASINFO_NAME=archive_viewer_asinfo
+
 OUT_DIR=web/pkg
 PROFILE=release
 SERVE=0
@@ -19,9 +25,11 @@ while [[ $# -gt 0 ]]; do
     --debug) PROFILE=debug ;;
     --dev-panics) FEATURES+=(--features dev-panics) ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      echo "usage: ./build.sh [--serve] [--debug] [--dev-panics]"
       echo
-      echo "options: --serve  --debug  --dev-panics"
+      echo "env: ASMAP_FILE=path   use a local asmap instead of downloading"
+      echo "     ASMAP_URL=url     download from somewhere else"
+      echo "     ASMAP_REFRESH=1   re-fetch even if web/asmap.dat exists"
       exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -52,29 +60,50 @@ EOF
 fi
 
 echo "==> cargo build ($PROFILE, wasm32-unknown-unknown)"
-BUILD_FLAGS=(--target wasm32-unknown-unknown -p "$CRATE" "${FEATURES[@]+"${FEATURES[@]}"}")
+BUILD_FLAGS=(--target wasm32-unknown-unknown -p "$CRATE" -p "$ASINFO_CRATE")
+[[ ${#FEATURES[@]} -gt 0 ]] && BUILD_FLAGS+=("${FEATURES[@]}")
 [[ "$PROFILE" == release ]] && BUILD_FLAGS+=(--release)
 cargo build "${BUILD_FLAGS[@]}"
 
 echo "==> wasm-bindgen"
 rm -rf "$OUT_DIR"
-wasm-bindgen \
-  --target web \
-  --no-typescript \
-  --out-dir "$OUT_DIR" \
-  "target/wasm32-unknown-unknown/$PROFILE/$WASM_NAME.wasm"
+for name in "$WASM_NAME" "$ASINFO_NAME"; do
+  wasm-bindgen --target web --no-typescript --out-dir "$OUT_DIR" \
+    "target/wasm32-unknown-unknown/$PROFILE/$name.wasm"
+done
 
 BG="$OUT_DIR/${WASM_NAME}_bg.wasm"
+ASINFO_BG="$OUT_DIR/${ASINFO_NAME}_bg.wasm"
 if [[ "$PROFILE" == release ]] && command -v wasm-opt >/dev/null; then
-  # -O3 rather than -Oz: this is a parsing-throughput bound app, not a
-  # size-bound one, and the page is loaded from a local file or Pages.
-  echo "==> wasm-opt -O3"
-  wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int \
-    -o "$BG.opt" "$BG"
+  # -O3 for the viewer: it is parsing-throughput bound, not size bound.
+  # -Oz for the name tables, which are inert data and only want to be small.
+  echo "==> wasm-opt"
+  wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int -o "$BG.opt" "$BG"
   mv "$BG.opt" "$BG"
+  wasm-opt -Oz --enable-bulk-memory -o "$ASINFO_BG.opt" "$ASINFO_BG"
+  mv "$ASINFO_BG.opt" "$ASINFO_BG"
 fi
 
-printf '==> %s (%s)\n' "$BG" "$(du -h "$BG" | cut -f1)"
+# The networks view needs Bitcoin Core's asmap trie. It is fetched rather than
+# vendored: ~1.5 MB, updated independently of this tool, and everything else
+# works without it.
+ASMAP_URL="${ASMAP_URL:-https://raw.githubusercontent.com/bitcoin-core/asmap-data/main/latest_asmap.dat}"
+ASMAP_DEST=web/asmap.dat
+if [[ -n "${ASMAP_FILE:-}" ]]; then
+  cp "$ASMAP_FILE" "$ASMAP_DEST"
+  echo "==> asmap from $ASMAP_FILE"
+elif [[ -f "$ASMAP_DEST" && -z "${ASMAP_REFRESH:-}" ]]; then
+  echo "==> asmap already present ($(du -h "$ASMAP_DEST" | cut -f1))"
+elif command -v curl >/dev/null && curl -sSfL -o "$ASMAP_DEST.tmp" "$ASMAP_URL"; then
+  mv "$ASMAP_DEST.tmp" "$ASMAP_DEST"
+  echo "==> asmap $(du -h "$ASMAP_DEST" | cut -f1)"
+else
+  rm -f "$ASMAP_DEST.tmp"
+  echo "==> asmap could not be fetched; the networks view will be unavailable" >&2
+fi
+
+printf '==> viewer %s, asn names %s\n' \
+  "$(du -h "$BG" | cut -f1)" "$(du -h "$ASINFO_BG" | cut -f1)"
 
 if [[ "$SERVE" == 1 ]]; then
   command -v miniserve >/dev/null || {

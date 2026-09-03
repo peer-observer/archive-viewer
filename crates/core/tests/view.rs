@@ -149,7 +149,7 @@ fn filters_by_group_peer_time_and_text() {
     );
 
     let by_peer = Filter {
-        peer_id: Some(0),
+        peer_ids: vec![0],
         ..Default::default()
     };
     let peer_result = view::query(&analysis, &mut cache, &by_peer, 0, 100);
@@ -201,7 +201,7 @@ fn filters_combine_conjunctively() {
     let mut cache = QueryCache::new();
     let filter = Filter {
         groups: vec!["message".into()],
-        peer_id: Some(1),
+        peer_ids: vec![1],
         ..Default::default()
     };
 
@@ -261,12 +261,12 @@ fn the_query_cache_invalidates_correctly() {
 #[test]
 fn a_filter_deserialises_from_the_ui_json() {
     let filter: Filter = serde_json::from_str(
-        r#"{"groups":["message"],"peerId":7,"timeFrom":10,"timeTo":20,"text":"inv","kinds":[1,2]}"#,
+        r#"{"groups":["message"],"peerIds":[7],"timeFrom":10,"timeTo":20,"text":"inv","kinds":[1,2]}"#,
     )
     .expect("filter parses");
 
     assert_eq!(filter.groups, vec!["message".to_string()]);
-    assert_eq!(filter.peer_id, Some(7));
+    assert_eq!(filter.peer_ids, vec![7]);
     assert_eq!(filter.time_from, Some(10));
     assert_eq!(filter.time_to, Some(20));
     assert_eq!(filter.kinds, vec![1, 2]);

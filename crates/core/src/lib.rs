@@ -11,6 +11,7 @@
 //! and `wasm32-unknown-unknown`.
 
 pub mod analysis;
+pub mod asn;
 pub mod decode;
 pub mod histogram;
 pub mod inspect;

@@ -5,8 +5,9 @@
 //! Building them here rather than in the wasm crate keeps them natively testable.
 
 use crate::analysis::Analysis;
+use crate::asn;
 use crate::kind::GROUPS;
-use crate::peers::PeerStats;
+use crate::peers::{LifecycleKind, PeerStats};
 use crate::proto::bitcoin_primitives::ConnType;
 use crate::store::NO_PEER;
 use serde::Deserialize;
@@ -351,7 +352,9 @@ pub struct Filter {
     pub kinds: Vec<u16>,
     /// Group names to include, e.g. `message`, `connection`.
     pub groups: Vec<String>,
-    pub peer_id: Option<u64>,
+    /// Peers to include. Empty means every peer; several are allowed so a
+    /// sequence diagram can show a conversation across more than one peer.
+    pub peer_ids: Vec<u64>,
     pub time_from: Option<u64>,
     pub time_to: Option<u64>,
     /// Substring match against the kind name and the peer address.
@@ -362,7 +365,7 @@ impl Filter {
     fn is_unconstrained(&self) -> bool {
         self.kinds.is_empty()
             && self.groups.is_empty()
-            && self.peer_id.is_none()
+            && self.peer_ids.is_empty()
             && self.time_from.is_none()
             && self.time_to.is_none()
             && self.text.is_empty()
@@ -412,9 +415,13 @@ fn scan(analysis: &Analysis, filter: &Filter) -> Vec<u32> {
     let peer_column = store.peers();
 
     // Resolve the filter to dense ids once rather than per row.
-    let peer_index = filter
-        .peer_id
-        .map(|id| analysis.peers.get(id).map_or(NO_PEER, |p| p.index));
+    let peer_wanted: Option<Vec<u32>> = (!filter.peer_ids.is_empty()).then(|| {
+        filter
+            .peer_ids
+            .iter()
+            .map(|id| analysis.peers.get(*id).map_or(NO_PEER, |p| p.index))
+            .collect()
+    });
     let kind_allowed: Option<Vec<bool>> = (!filter.kinds.is_empty() || !filter.groups.is_empty())
         .then(|| {
             (0..analysis.kinds.len() as u16)
@@ -443,8 +450,8 @@ fn scan(analysis: &Analysis, filter: &Filter) -> Vec<u32> {
                     return false;
                 }
             }
-            if let Some(wanted) = peer_index {
-                if peer_column[row] != wanted {
+            if let Some(wanted) = &peer_wanted {
+                if !wanted.contains(&peer_column[row]) {
                     return false;
                 }
             }
@@ -584,4 +591,91 @@ pub(crate) fn signed_number(value: i64) -> Value {
     } else {
         json!(value.to_string())
     }
+}
+
+/// Networks (autonomous systems) the archive's peers belong to.
+///
+/// Requires an asmap file; without one the page says so rather than falling back
+/// to a guess like grouping by /16, which would be wrong for anyone
+/// multi-homing or announcing out of a larger allocation.
+pub fn networks(
+    analysis: &Analysis,
+    asmap: Option<&asmap::Asmap>,
+    offset: usize,
+    limit: usize,
+) -> Value {
+    let Some(asmap) = asmap else {
+        return json!({ "available": false, "total": 0, "rows": [] });
+    };
+    let groups = asn::group(analysis, asmap);
+    let rows: Vec<Value> = groups
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(network, stats)| network_row(*network, stats))
+        .collect();
+
+    json!({
+        "available": true,
+        "total": groups.len(),
+        "offset": offset,
+        "peersCovered": groups.iter().map(|(_, s)| s.peers).sum::<u64>(),
+        "rows": rows,
+    })
+}
+
+fn network_row(network: asn::Network, stats: &asn::NetworkStats) -> Value {
+    // Deliberately no AS name here. The `asinfo` tables are ~4 MB embedded at
+    // compile time, which would quadruple the wasm bundle for a label shown on
+    // one screen, so naming lives in a separate module the page loads on demand.
+    json!({
+        "asn": network.asn(),
+        "label": network.label(),
+        "peers": stats.peers,
+        "messagesIn": stats.messages_in,
+        "messagesOut": stats.messages_out,
+        "bytesIn": stats.bytes_in,
+        "bytesOut": stats.bytes_out,
+        "inbound": stats.count(LifecycleKind::Inbound),
+        "outbound": stats.count(LifecycleKind::Outbound),
+        "closed": stats.count(LifecycleKind::Closed),
+        "evicted": stats.count(LifecycleKind::InboundEvicted),
+        "misbehaving": stats.count(LifecycleKind::Misbehaving),
+        "evictionRatio": stats.eviction_ratio(),
+        "firstSeen": stats.first_seen,
+        "lastSeen": stats.last_seen,
+        "events": stats.events(),
+    })
+}
+
+/// Peer ids belonging to one network, busiest first.
+///
+/// `asn` is `None` for the non-AS buckets, which `label` then distinguishes.
+pub fn network_peers(
+    analysis: &Analysis,
+    asmap: Option<&asmap::Asmap>,
+    asn_wanted: Option<u32>,
+    label: &str,
+    limit: usize,
+) -> Value {
+    let Some(asmap) = asmap else {
+        return json!({ "rows": [] });
+    };
+    let wanted = match asn_wanted {
+        Some(asn) => asn::Network::Asn(asn),
+        None => match label {
+            "unmapped IP" => asn::Network::UnmappedIp,
+            "Tor / I2P / CJDNS" => asn::Network::Anonymising,
+            _ => asn::Network::Unknown,
+        },
+    };
+
+    let mut peers: Vec<&PeerStats> = analysis
+        .peers
+        .iter()
+        .filter(|peer| asn::network_of(peer, asmap) == wanted)
+        .collect();
+    peers.sort_by_key(|p| std::cmp::Reverse(p.events()));
+
+    json!({ "rows": peers.iter().take(limit).map(|p| peer_row(p)).collect::<Vec<_>>() })
 }
