@@ -210,18 +210,18 @@ canvas { display: block; width: 100%; }
 #seq .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
 #seq .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
 #seq .arrow { stroke-width: 1.5; fill: none; }
-#seq .label { font-size: 11px; }
+#seq .label { font-size: 11px; fill: var(--ink-2); }
 #seq .gutter { fill: var(--ink-3); font-size: 10px; }
 #seq .hit { fill: transparent; cursor: pointer; }
 #seq .row:hover .hit { fill: var(--panel-2); }
 #seq .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
-#seq .note { fill: var(--panel-2); stroke: var(--rule-2); }
+#seq .note { fill: var(--panel-2); stroke: var(--rule-2); stroke-opacity: 0.6; }
 #seq .notetext { fill: var(--ink-2); font-size: 10px; }
-/* Removing a lifeline happens on the lifeline's own header. */
+/* Removing a lifeline happens on the lifeline's own header: a bare ×, with an
+   invisible rect behind it only to give the click a comfortable target. */
 #seq .rm { cursor: pointer; }
-#seq .rmhit { fill: transparent; }
-#seq .rmx { fill: var(--ink-3); font-size: 14px; font-family: var(--sans); }
-#seq .rm:hover .rmhit { fill: var(--panel); stroke: var(--rule-2); }
+#seq .rmhit { fill: none; stroke: none; pointer-events: all; }
+#seq .rmx { fill: var(--ink-3); stroke: none; font-size: 15px; font-family: var(--sans); }
 #seq .rm:hover .rmx { fill: var(--bad); }
 
 /* -------------------------------------------------------------- start/load */
@@ -1646,6 +1646,9 @@ function drawSequence() {
   const laneX = (i) => SEQ.gutter + SEQ.lane * i + SEQ.lane / 2;
   const nodeX = laneX(0);
   const peerX = (peerId) => laneX(lanes.indexOf(peerId) + 1);
+  // Fixed categorical slot per lane, never cycled: at most six lifelines are
+  // allowed and the palette has eight hues.
+  const peerColour = (peerId) => color(Math.max(0, lanes.indexOf(peerId)));
 
   // Lifelines, with a header box each.
   // Gutter column headers. The date lives here, once, so each row needs only a
@@ -1670,9 +1673,23 @@ function drawSequence() {
   );
   heads.forEach((head, i) => {
     const x = laneX(i);
-    node.append(svg('line', { class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad }));
+    // This node is the fixed reference and stays neutral; each peer takes the
+    // next categorical slot, so its lifeline, header and arrows all agree.
+    const colour = i === 0 ? null : color(i - 1);
+    const life = svg('line', {
+      class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad,
+    });
+    // Inline style, not a presentation attribute: `#seq .life` and `#seq .head`
+    // already set `stroke`, and any CSS rule beats a presentation attribute.
+    if (colour) {
+      life.style.stroke = colour;
+      life.style.strokeOpacity = '0.5';
+    }
+    node.append(life);
     const w = SEQ.lane - 26;
-    node.append(svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 }));
+    const box = svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 });
+    if (colour) box.style.stroke = colour;
+    node.append(box);
     // Centre the title in the box when there is no subtitle under it.
     const t = svg('text', { class: 'headtext', x, y: head.sub ? 22 : 28, 'text-anchor': 'middle' });
     t.textContent = head.title;
@@ -1688,7 +1705,7 @@ function drawSequence() {
       const cx = x + w / 2 - 11;
       const cy = 22;
       const rm = svg('g', { class: 'rm' });
-      rm.append(svg('circle', { class: 'rmhit', cx, cy, r: 9 }));
+      rm.append(svg('rect', { class: 'rmhit', x: cx - 9, y: cy - 9, width: 18, height: 18 }));
       const cross = svg('text', { class: 'rmx', x: cx, y: cy + 4, 'text-anchor': 'middle' });
       cross.textContent = '×';
       rm.append(cross);
@@ -1728,13 +1745,15 @@ function drawSequence() {
     previous = r.timestamp;
 
     const px = peerX(r.peerId);
-    const colour = groupColor(r.group);
+    const colour = peerColour(r.peerId);
 
     if (r.group === 'connection') {
       // Lifecycle events are not an exchange, so they are a note on the peer's
       // own lifeline rather than an arrow.
       const w = 132;
-      g.append(svg('rect', { class: 'note', x: px - w / 2, y: y - 8, width: w, height: 16, rx: 2 }));
+      const box = svg('rect', { class: 'note', x: px - w / 2, y: y - 8, width: w, height: 16, rx: 2 });
+      box.style.stroke = colour;
+      g.append(box);
       const t = svg('text', { class: 'notetext', x: px, y: y + 3.5, 'text-anchor': 'middle' });
       t.textContent = r.kind ?? '';
       g.append(t);
@@ -1749,8 +1768,11 @@ function drawSequence() {
         d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
         fill: colour,
       }));
+      // The label stays in a text token rather than the peer's colour: three of
+      // the palette's hues sit below 3:1 on the light surface and are unreadable
+      // at 11px. The arrow carries the identity; the label carries the words.
       const label = svg('text', {
-        class: 'label', x: (from + to) / 2, y: y - 5, 'text-anchor': 'middle', fill: colour,
+        class: 'label', x: (from + to) / 2, y: y - 5, 'text-anchor': 'middle',
       });
       label.textContent = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
       g.append(label);
