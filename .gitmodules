@@ -1,0 +1,4 @@
+[submodule "peer-observer"]
+	path = peer-observer
+	url = https://github.com/peer-observer/peer-observer.git
+	branch = master

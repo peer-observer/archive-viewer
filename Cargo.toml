@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/wasm", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/0xb10c/archive-viewer-peer-observer"
+
+[workspace.dependencies]
+archive-viewer-core = { path = "crates/core" }
+prost = "0.14"
+prost-reflect = "0.16"
+prost-build = "0.14"
+ruzstd = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# This app is parsing-throughput bound, not size bound, so optimise for speed.
+# See README for the resulting wasm size.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
