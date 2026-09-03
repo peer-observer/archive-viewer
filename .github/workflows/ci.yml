@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The protobuf schema is compiled from the submodule; without it nothing builds.
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fmt
+            command: cargo fmt --all -- --check
+          - name: clippy
+            command: cargo clippy --all-targets --all-features
+          # The test fixtures use the C zstd crate to *write* archives, which
+          # does not build for wasm32, so lint the library only for that target.
+          - name: clippy (wasm32)
+            command: cargo clippy --lib --all-features --target wasm32-unknown-unknown
+          - name: test
+            command: cargo test --workspace --all-features
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+      - run: nix develop --command ${{ matrix.command }}
+
+  wasm:
+    name: wasm bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+      - run: nix develop --command ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-viewer-web
+          path: web/
+          if-no-files-found: error
+
+  flake:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+      - run: nix flake check
