@@ -6,6 +6,7 @@
 
 use crate::analysis::Analysis;
 use crate::asn;
+use crate::exchange::{match_turns, Turn};
 use crate::kind::GROUPS;
 use crate::peers::{LifecycleKind, PeerStats};
 use crate::proto::bitcoin_primitives::ConnType;
@@ -501,19 +502,72 @@ pub fn query(
     limit: usize,
 ) -> Value {
     cache.refresh(analysis, filter);
-    let indices: Vec<u32> = match &cache.matches {
-        Some(matches) => matches.iter().skip(offset).take(limit).copied().collect(),
-        None => (offset as u32..)
-            .take(limit)
-            .take_while(|i| (*i as usize) < analysis.store.len())
-            .collect(),
-    };
-
+    let indices = page_indices(analysis, cache, offset, limit);
     let rows: Vec<Value> = indices
         .iter()
         .filter_map(|&i| event_row(analysis, i))
         .collect();
     json!({ "total": cache.total, "offset": offset, "rows": rows })
+}
+
+/// A page of the sequence diagram: the same rows [`query`] returns, plus the
+/// request/reply ties among them.
+///
+/// Ties are positions within `rows`, so the caller can draw them without
+/// looking anything up. They are matched only within the page: an exchange
+/// whose request and reply fall either side of a page boundary is not
+/// reported. See [`crate::exchange`] for what a tie does and does not prove.
+pub fn sequence(
+    analysis: &Analysis,
+    cache: &mut QueryCache,
+    filter: &Filter,
+    offset: usize,
+    limit: usize,
+) -> Value {
+    cache.refresh(analysis, filter);
+    let indices = page_indices(analysis, cache, offset, limit);
+
+    // Built in one pass, so that a row the store cannot produce drops out of
+    // both lists at once and the tie positions stay aligned with the rows.
+    let mut turns = Vec::with_capacity(indices.len());
+    let mut rows = Vec::with_capacity(indices.len());
+    for &index in &indices {
+        let (Some(row), Some(value)) = (analysis.store.row(index), event_row(analysis, index))
+        else {
+            continue;
+        };
+        turns.push(Turn {
+            peer: row.peer,
+            command: analysis.kinds.get(row.kind).map_or("", |k| k.name.as_str()),
+            inbound: row.inbound(),
+            timestamp: row.timestamp,
+        });
+        rows.push(value);
+    }
+
+    let ties: Vec<Value> = match_turns(&turns)
+        .into_iter()
+        .map(|tie| {
+            json!({
+                "request": tie.request,
+                "reply": tie.reply,
+                "elapsedMs": tie.elapsed_ms,
+            })
+        })
+        .collect();
+
+    json!({ "total": cache.total, "offset": offset, "rows": rows, "ties": ties })
+}
+
+/// The store indices making up one page of a query.
+fn page_indices(analysis: &Analysis, cache: &QueryCache, offset: usize, limit: usize) -> Vec<u32> {
+    match &cache.matches {
+        Some(matches) => matches.iter().skip(offset).take(limit).copied().collect(),
+        None => (offset as u32..)
+            .take(limit)
+            .take_while(|i| (*i as usize) < analysis.store.len())
+            .collect(),
+    }
 }
 
 fn event_row(analysis: &Analysis, index: u32) -> Option<Value> {

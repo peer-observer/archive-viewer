@@ -13,6 +13,7 @@
 pub mod analysis;
 pub mod asn;
 pub mod decode;
+pub mod exchange;
 pub mod histogram;
 pub mod inspect;
 pub mod kind;

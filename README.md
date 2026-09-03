@@ -73,6 +73,23 @@ A handshake reads directly off it:
 This is peer-observer issue #397, done in the browser rather than by exporting to
 an external diagram tool.
 
+Requests are linked to the replies they caused. A bracket in the left margin
+spans an exchange — `getaddr` to the `addr` that answers it, `inv` to `getdata`
+to the `tx` it fetched, `version` to `verack`, `ping` to `pong`, `cmpctblock` to
+`getblocktxn` to `blocktxn`, and the BIP157 filter messages — and the reply
+carries how long the peer took. A request answered by many messages, like one
+`getdata` pulling down thirty transactions, gets a single bracket with a tick per
+reply. Hovering either end lights up the whole exchange.
+
+These links are inferred, and the view says so. The archive records a message's
+command, direction, size and time, but not the txids, block hashes or ping nonces
+inside it, so a tie is the nearest matching unanswered request rather than a
+proven pairing. It is as good as certain for the handshake, for pings and for the
+BIP157 messages, which are only ever sent in reply to something; it can mislink
+where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
+`cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
+a page boundary is not drawn. The toggle in the toolbar turns them off.
+
 ### The ASN database
 
 The networks view needs two things the rest of the page does not:

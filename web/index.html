@@ -211,6 +211,13 @@ canvas { display: block; width: 100%; }
 #seq .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
 #seq .arrow { stroke-width: 1.5; fill: none; }
 #seq .label { font-size: 11px; fill: var(--ink-2); }
+#seq .elapsed { fill: var(--ink-3); }
+/* Knocks a crossed lifeline out from under a label: an arrow to a distant
+   lane runs straight through the lifelines in between. */
+#seq .plate { fill: var(--panel); }
+#seq .tie { fill: none; stroke-width: 1.25; stroke-opacity: 0.4; pointer-events: none; }
+#seq .tie.on { stroke-opacity: 1; stroke-width: 2; }
+#seq .row.tied .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
 #seq .gutter { fill: var(--ink-3); font-size: 10px; }
 #seq .hit { fill: transparent; cursor: pointer; }
 #seq .row:hover .hit { fill: var(--panel-2); }
@@ -392,6 +399,10 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <option value="200" selected>200</option>
           <option value="500">500</option>
         </select>
+        <label class="dim" style="display:flex;align-items:center;gap:4px"
+               title="Link each request to the reply it most likely caused. The archive records no txids, block hashes or ping nonces, so a reply that also arrives unsolicited — inv, headers, addr, cmpctblock — can be tied to the wrong request. Exchanges spanning a page boundary are not shown.">
+          <input type="checkbox" id="seq-ties" checked> link replies
+        </label>
       </div>
       <div id="seq-note"></div>
       <div class="side">
@@ -1551,7 +1562,7 @@ function jsonNodes(value, depth) {
 
 /* ------------------------------------------------------- sequence diagram */
 
-const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24 };
+const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24, tie: 9, tieDepth: 6 };
 const SVGNS = 'http://www.w3.org/2000/svg';
 const svg = (tag, attrs = {}) => {
   const n = document.createElementNS(SVGNS, tag);
@@ -1595,6 +1606,38 @@ function seqRemovePeer(peerId) {
   drawSequence();
 }
 
+/**
+ * Collect ties into one bracket per request, and give each bracket a nesting
+ * depth so that two whose spans overlap never draw on the same line.
+ *
+ * Grouping by request matters: a single `getdata` is answered by every `tx` it
+ * asked for, and drawing those as separate brackets would stack a hundred of
+ * them from the same row. One bracket with a tick per reply says the same thing
+ * in one column.
+ */
+function exchangeBrackets(ties) {
+  const byRequest = new Map();
+  for (const tie of ties) {
+    const group = byRequest.get(tie.request)
+      ?? { request: tie.request, replies: [], last: tie.request };
+    group.replies.push(tie);
+    group.last = Math.max(group.last, tie.reply);
+    byRequest.set(tie.request, group);
+  }
+
+  const brackets = [...byRequest.values()].sort((a, b) => a.request - b.request || a.last - b.last);
+  const open = [];
+  for (const bracket of brackets) {
+    let depth = open.findIndex((end) => end < bracket.request);
+    // Deeper than the diagram has room for: share the outermost column rather
+    // than pushing every row further right.
+    if (depth === -1) depth = Math.min(open.length, SEQ.tieDepth - 1);
+    open[depth] = bracket.last;
+    bracket.depth = depth;
+  }
+  return brackets;
+}
+
 function drawSequence() {
   if (!S.session || S.dead) return;
   renderBack('seq-back');
@@ -1620,7 +1663,7 @@ function drawSequence() {
     timeTo: S.filter.timeTo,
     text: '',
   };
-  const page = callJson('query', JSON.stringify(filter), S.seqOffset, seqLimit());
+  const page = callJson('sequence', JSON.stringify(filter), S.seqOffset, seqLimit());
   if (!page) return;
   S.seqRows = page.rows;
 
@@ -1635,33 +1678,55 @@ function drawSequence() {
     return;
   }
 
+  // Exchanges are matched within the page, so a request answered on the next
+  // screenful simply has no bracket. Turning them off is worth having: on a
+  // busy peer nearly every row takes part in one.
+  const ties = $('seq-ties').checked ? (page.ties ?? []) : [];
+  const brackets = exchangeBrackets(ties);
+  const tieWidth = brackets.length
+    ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
+    : 0;
+  const gutter = SEQ.gutter + tieWidth;
+
   const lanes = S.seqPeers;
-  const width = SEQ.gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad;
+  const width = gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad;
   const height = SEQ.top + page.rows.length * SEQ.row + SEQ.pad;
   node.setAttribute('width', width);
   node.setAttribute('height', height);
   node.setAttribute('viewBox', `0 0 ${width} ${height}`);
   $('seq-scroll').style.maxHeight = 'calc(100vh - 190px)';
 
-  const laneX = (i) => SEQ.gutter + SEQ.lane * i + SEQ.lane / 2;
+  const laneX = (i) => gutter + SEQ.lane * i + SEQ.lane / 2;
+  const rowY = (i) => SEQ.top + i * SEQ.row + SEQ.row / 2;
   const nodeX = laneX(0);
   const peerX = (peerId) => laneX(lanes.indexOf(peerId) + 1);
   // Fixed categorical slot per lane, never cycled: at most six lifelines are
   // allowed and the palette has eight hues.
   const peerColour = (peerId) => color(Math.max(0, lanes.indexOf(peerId)));
 
-  // Lifelines, with a header box each.
+  /**
+   * An opaque plate to sit under a label. An arrow to a distant lane crosses
+   * the lifelines in between, and a label straddling one is unreadable without
+   * this. Width comes from the character count rather than `getBBox`, which
+   * reports nothing while the tab is still hidden; the diagram is monospaced,
+   * so counting is accurate.
+   */
+  const plate = (text, cx, baseline) => {
+    const w = text.length * 6.7 + 8;
+    return svg('rect', { class: 'plate', x: cx - w / 2, y: baseline - 10, width: w, height: 13, rx: 2 });
+  };
+
   // Gutter column headers. The date lives here, once, so each row needs only a
   // time of day — a full timestamp on every row is wide enough to run into the
   // delta column beside it.
   const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
-  const dayLabel = svg('text', { class: 'headsub', x: 10, y: 22 });
+  const dayLabel = svg('text', { class: 'headsub', x: tieWidth + 10, y: 22 });
   dayLabel.textContent = days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0];
   node.append(dayLabel);
-  const dayUnit = svg('text', { class: 'headsub', x: 10, y: 34 });
+  const dayUnit = svg('text', { class: 'headsub', x: tieWidth + 10, y: 34 });
   dayUnit.textContent = 'UTC';
   node.append(dayUnit);
-  const deltaHead = svg('text', { class: 'headsub', x: SEQ.gutter - 14, y: 34, 'text-anchor': 'end' });
+  const deltaHead = svg('text', { class: 'headsub', x: gutter - 14, y: 34, 'text-anchor': 'end' });
   deltaHead.textContent = 'since prev';
   node.append(deltaHead);
 
@@ -1720,23 +1785,41 @@ function drawSequence() {
     }
   });
 
+  // How long each reply took, and which exchange a row takes part in.
+  const elapsedOf = new Map(ties.map((t) => [t.reply, t.elapsedMs]));
+  const bracketAt = new Map();
+  for (const bracket of brackets) {
+    for (const position of [bracket.request, ...bracket.replies.map((t) => t.reply)]) {
+      if (!bracketAt.has(position)) bracketAt.set(position, []);
+      bracketAt.get(position).push(bracket);
+    }
+  }
+
+  // Label plates go in their own layer, under every row: they knock the
+  // lifelines out from under a label, but must stay below the row hover fill,
+  // which would otherwise show a pale rectangle behind each label.
+  const plates = svg('g');
+  node.append(plates);
+
+  const rowEls = [];
   let previous = null;
   page.rows.forEach((r, i) => {
-    const y = SEQ.top + i * SEQ.row + SEQ.row / 2;
+    const y = rowY(i);
     const g = svg('g', { class: `row${S.seqSelected === r.index ? ' on' : ''}` });
+    rowEls[i] = g;
 
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
 
     // Gutter: time of day on the left, gap since the previous message on the
     // right. The date is in the column header, so these two never collide.
-    const time = svg('text', { class: 'gutter', x: 10, y: y + 3.5 });
+    const time = svg('text', { class: 'gutter', x: tieWidth + 10, y: y + 3.5 });
     time.textContent = utc(r.timestamp).slice(11);
     g.append(time);
     if (previous !== null) {
       const gap = r.timestamp - previous;
       if (gap > 0) {
         const delta = svg('text', {
-          class: 'gutter', x: SEQ.gutter - 14, y: y + 3.5, 'text-anchor': 'end',
+          class: 'gutter', x: gutter - 14, y: y + 3.5, 'text-anchor': 'end',
         });
         delta.textContent = `+${dur(gap)}`;
         g.append(delta);
@@ -1771,10 +1854,17 @@ function drawSequence() {
       // The label stays in a text token rather than the peer's colour: three of
       // the palette's hues sit below 3:1 on the light surface and are unreadable
       // at 11px. The arrow carries the identity; the label carries the words.
-      const label = svg('text', {
-        class: 'label', x: (from + to) / 2, y: y - 5, 'text-anchor': 'middle',
-      });
-      label.textContent = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
+      const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
+      const elapsed = elapsedOf.has(i) ? ` ↩ ${dur(elapsedOf.get(i))}` : '';
+      const cx = (from + to) / 2;
+      plates.append(plate(main + elapsed, cx, y - 5));
+      const label = svg('text', { class: 'label', x: cx, y: y - 5, 'text-anchor': 'middle' });
+      label.textContent = main;
+      if (elapsed) {
+        const span = svg('tspan', { class: 'elapsed' });
+        span.textContent = elapsed;
+        label.append(span);
+      }
       g.append(label);
     }
 
@@ -1785,7 +1875,58 @@ function drawSequence() {
     });
     node.append(g);
   });
+
+  // Exchange brackets, drawn last so a hovered row's highlight does not cover
+  // them. They take no pointer events of their own: the rows drive the focus.
+  for (const bracket of brackets) {
+    const x = 8 + bracket.depth * SEQ.tie;
+    const top = rowY(bracket.request);
+    // The spine runs from the request to the last reply, with a tick out to
+    // each reply along the way.
+    const spine = `M ${x + 5} ${top} H ${x} V ${rowY(bracket.last)}`;
+    const ticks = bracket.replies
+      .map((tie) => ` M ${x} ${rowY(tie.reply)} H ${x + 5}`)
+      .join('');
+    const path = svg('path', { class: 'tie', d: spine + ticks });
+    path.style.stroke = peerColour(page.rows[bracket.request].peerId);
+
+    const request = page.rows[bracket.request].kind;
+    const answers = bracket.replies.map((tie) => page.rows[tie.reply].kind);
+    const spread = bracket.replies.map((tie) => tie.elapsedMs);
+    const tip = svg('title');
+    tip.textContent = answers.length === 1
+      ? `${request} → ${answers[0]}, ${dur(spread[0])}`
+      : `${request} → ${answers.length} replies, `
+        + `${dur(Math.min(...spread))} to ${dur(Math.max(...spread))}`;
+    path.append(tip);
+
+    bracket.el = path;
+    node.append(path);
+  }
+
+  const focus = (position, on) => {
+    for (const bracket of bracketAt.get(position) ?? []) {
+      bracket.el?.classList.toggle('on', on);
+      rowEls[bracket.request]?.classList.toggle('tied', on);
+      for (const tie of bracket.replies) rowEls[tie.reply]?.classList.toggle('tied', on);
+    }
+  };
+  for (const position of bracketAt.keys()) {
+    rowEls[position]?.addEventListener('mouseenter', () => focus(position, true));
+    rowEls[position]?.addEventListener('mouseleave', () => focus(position, false));
+  }
+
+  if (brackets.length) {
+    // One line, not a banner: the caveat is worth stating but it is the same
+    // caveat on every draw. The rest of it is on the toggle's tooltip.
+    const caption = el('div', 'dim',
+      `${num(ties.length)} replies linked to ${num(brackets.length)} requests, `
+      + 'inferred from command, direction and timing rather than from txids.');
+    caption.style.margin = '0 0 6px';
+    note.append(caption);
+  }
 }
+
 
 /* ------------------------------------------------------------------- tabs */
 function showTab(name) {
@@ -1882,6 +2023,7 @@ function setup() {
     drawSequence();
   });
   $('seq-limit').addEventListener('change', () => { S.seqOffset = 0; drawSequence(); });
+  $("seq-ties").addEventListener("change", drawSequence);
 
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);

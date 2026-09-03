@@ -433,3 +433,65 @@ fn lifecycle_events_report_a_real_connection_lifetime() {
     );
     assert_eq!(entry["establishedAt"], established_secs * 1000);
 }
+
+#[test]
+fn the_sequence_view_ties_requests_to_their_replies() {
+    // One peer's transaction relay round trip, plus a ping that is answered
+    // and a stray unsolicited addrv2 that is not.
+    let events = vec![
+        message_event(1_000, 3, "inv", true, 37),
+        message_event(1_050, 3, "getdata", false, 37),
+        message_event(1_200, 3, "tx", true, 250),
+        message_event(1_260, 3, "tx", true, 190),
+        message_event(1_300, 3, "addrv2", true, 60),
+        message_event(1_400, 3, "ping", false, 32),
+        message_event(1_512, 3, "pong", true, 32),
+    ];
+    let stream = record_stream(&header(1_700_000_000, Some(false)), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("test.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let mut cache = QueryCache::new();
+    let page = view::sequence(&analysis, &mut cache, &Filter::default(), 0, 100);
+
+    // The rows are exactly what `query` returns.
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 7);
+    assert_eq!(rows[0]["kind"], "inv");
+
+    let ties: Vec<(u64, u64, u64)> = page["ties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["request"].as_u64().unwrap(),
+                t["reply"].as_u64().unwrap(),
+                t["elapsedMs"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ties,
+        vec![(0, 1, 50), (1, 2, 150), (1, 3, 210), (5, 6, 112)],
+        "inv -> getdata -> two tx, and ping -> pong; the addrv2 is untied"
+    );
+}
+
+#[test]
+fn sequence_ties_are_positions_within_the_page() {
+    let analysis = loaded();
+    let mut cache = QueryCache::new();
+    // `loaded()` alternates inbound and outbound `inv`, so an outbound inv is
+    // never answered by a getdata -- what matters here is that a second page
+    // numbers its ties from zero rather than from the offset.
+    let page = view::sequence(&analysis, &mut cache, &Filter::default(), 50, 10);
+    assert_eq!(page["offset"], 50);
+    assert_eq!(page["rows"].as_array().unwrap().len(), 10);
+    for tie in page["ties"].as_array().unwrap() {
+        assert!(tie["reply"].as_u64().unwrap() < 10);
+        assert!(tie["request"].as_u64().unwrap() < tie["reply"].as_u64().unwrap());
+    }
+}

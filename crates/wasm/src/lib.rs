@@ -139,6 +139,26 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// A page of the sequence diagram: the same rows as [`Session::query`],
+    /// plus the request/reply ties among them.
+    pub fn sequence(
+        &mut self,
+        filter_json: &str,
+        offset: u32,
+        limit: u32,
+    ) -> Result<String, JsError> {
+        let filter: Filter = serde_json::from_str(filter_json)
+            .map_err(|e| JsError::new(&format!("bad filter: {e}")))?;
+        let result = view::sequence(
+            &self.analysis,
+            &mut self.cache,
+            &filter,
+            offset as usize,
+            limit as usize,
+        );
+        Ok(result.to_string())
+    }
+
     /// Load a Bitcoin Core asmap file, enabling the networks view.
     ///
     /// The page fetches this at runtime rather than embedding it: it is ~1.5 MB,
