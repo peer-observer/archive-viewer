@@ -382,6 +382,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <!-- ------------------------------------------------------- sequence -->
     <div id="tab-sequence" hidden>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+        <span id="seq-back"></span>
         <span class="dim">peers</span>
         <span id="seq-peers" style="display:flex;gap:6px;flex-wrap:wrap"></span>
         <select id="seq-add"><option value="">add peer&hellip;</option></select>
@@ -1096,8 +1097,11 @@ function selectPeer(peerId) {
   }
   body.append(facts);
 
-  const jump = el('button', 'b', 'Show this peer’s events →');
-  jump.style.marginTop = '10px';
+  const actions = el('div');
+  actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:10px';
+
+  const jump = el('button', 'b', 'Events →');
+  jump.title = 'Show only this peer’s events in the events table';
   jump.addEventListener('click', () => {
     S.filter.peerIds = [peerId];
     S.returnToPeer = peerId;
@@ -1105,7 +1109,21 @@ function selectPeer(peerId) {
     refreshEvents();
     showTab('events');
   });
-  body.append(jump);
+
+  const seqJump = el('button', 'b', 'Sequence →');
+  seqJump.title = 'Draw this peer’s message exchange as a sequence diagram';
+  seqJump.addEventListener('click', () => {
+    // Replace the selection rather than adding to it: coming from one peer,
+    // that peer is the conversation you want to see.
+    S.seqPeers = [peerId];
+    S.seqOffset = 0;
+    S.seqSelected = null;
+    S.returnToPeer = peerId;
+    showTab('sequence');
+  });
+
+  actions.append(jump, seqJump);
+  body.append(actions);
   panel.append(body);
 
   if (d.commands.length) {
@@ -1393,20 +1411,29 @@ function chips() {
     box.append(chip(`${utc(S.filter.timeFrom, false)} → ${utc(S.filter.timeTo, false)}`, clearRange));
   }
 
-  const back = $('eback');
-  back.replaceChildren();
-  if (S.returnToPeer !== null) {
-    const b = el('button', 'b', `← peer ${S.returnToPeer}`);
-    b.title = 'Back to the peer list';
-    b.addEventListener('click', () => {
-      const peer = S.returnToPeer;
-      S.returnToPeer = null;
-      chips();
-      showTab('peers');
-      selectPeer(peer);
-    });
-    back.append(b);
-  }
+  renderBack('eback');
+}
+
+/**
+ * The way back to the peer you arrived from. Rendered on both the events and
+ * sequence tabs, since either can be opened from a peer's detail pane.
+ */
+function renderBack(elementId) {
+  const box = $(elementId);
+  box.replaceChildren();
+  if (S.returnToPeer === null) return;
+  const b = el('button', 'b', `← peer ${S.returnToPeer}`);
+  b.title = 'Back to this peer in the peer list';
+  b.addEventListener('click', () => {
+    const peer = S.returnToPeer;
+    S.returnToPeer = null;
+    renderBack('eback');
+    renderBack('seq-back');
+    showPeerMode('peers');
+    showTab('peers');
+    selectPeer(peer);
+  });
+  box.append(b);
 }
 
 function chip(label, onRemove) {
@@ -1566,6 +1593,7 @@ function seqAddPeer(peerId) {
 }
 
 function renderSeqChips() {
+  renderBack('seq-back');
   const box = $('seq-peers');
   box.replaceChildren();
   for (const id of S.seqPeers) {
