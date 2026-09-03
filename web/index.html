@@ -1638,7 +1638,21 @@ function drawSequence() {
   const peerX = (peerId) => laneX(lanes.indexOf(peerId) + 1);
 
   // Lifelines, with a header box each.
-  const heads = [{ title: 'this node', sub: 'Bitcoin Core' }].concat(
+  // Gutter column headers. The date lives here, once, so each row needs only a
+  // time of day — a full timestamp on every row is wide enough to run into the
+  // delta column beside it.
+  const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
+  const dayLabel = svg('text', { class: 'headsub', x: 10, y: 22 });
+  dayLabel.textContent = days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0];
+  node.append(dayLabel);
+  const dayUnit = svg('text', { class: 'headsub', x: 10, y: 34 });
+  dayUnit.textContent = 'UTC';
+  node.append(dayUnit);
+  const deltaHead = svg('text', { class: 'headsub', x: SEQ.gutter - 14, y: 34, 'text-anchor': 'end' });
+  deltaHead.textContent = 'since prev';
+  node.append(deltaHead);
+
+  const heads = [{ title: 'this node', sub: '' }].concat(
     lanes.map((id) => {
       const peer = S.peerRows.find((p) => p.peerId === id);
       return { title: `peer ${id}`, sub: peer?.addr ?? '' };
@@ -1649,12 +1663,15 @@ function drawSequence() {
     node.append(svg('line', { class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad }));
     const w = SEQ.lane - 26;
     node.append(svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 }));
-    const t = svg('text', { class: 'headtext', x, y: 22, 'text-anchor': 'middle' });
+    // Centre the title in the box when there is no subtitle under it.
+    const t = svg('text', { class: 'headtext', x, y: head.sub ? 22 : 28, 'text-anchor': 'middle' });
     t.textContent = head.title;
     node.append(t);
-    const s = svg('text', { class: 'headsub', x, y: 34, 'text-anchor': 'middle' });
-    s.textContent = head.sub.length > 30 ? head.sub.slice(0, 29) + '…' : head.sub;
-    node.append(s);
+    if (head.sub) {
+      const s = svg('text', { class: 'headsub', x, y: 34, 'text-anchor': 'middle' });
+      s.textContent = head.sub.length > 30 ? head.sub.slice(0, 29) + '…' : head.sub;
+      node.append(s);
+    }
   });
 
   let previous = null;
@@ -1664,15 +1681,20 @@ function drawSequence() {
 
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
 
-    // Gutter: absolute time, and the gap since the previous message.
-    const time = svg('text', { class: 'gutter', x: 8, y: y + 3.5 });
-    time.textContent = utc(r.timestamp);
+    // Gutter: time of day on the left, gap since the previous message on the
+    // right. The date is in the column header, so these two never collide.
+    const time = svg('text', { class: 'gutter', x: 10, y: y + 3.5 });
+    time.textContent = utc(r.timestamp).slice(11);
     g.append(time);
     if (previous !== null) {
-      const delta = svg('text', { class: 'gutter', x: SEQ.gutter - 12, y: y + 3.5, 'text-anchor': 'end' });
       const gap = r.timestamp - previous;
-      delta.textContent = gap > 0 ? `+${dur(gap)}` : '';
-      g.append(delta);
+      if (gap > 0) {
+        const delta = svg('text', {
+          class: 'gutter', x: SEQ.gutter - 14, y: y + 3.5, 'text-anchor': 'end',
+        });
+        delta.textContent = `+${dur(gap)}`;
+        g.append(delta);
+      }
     }
     previous = r.timestamp;
 
