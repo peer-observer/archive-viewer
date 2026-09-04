@@ -181,6 +181,11 @@ canvas { display: block; width: 100%; }
 .cols.c2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .side { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(340px, 26%); align-items: start; }
 .side.solo { grid-template-columns: minmax(0, 1fr); }
+/* Repeated layout, so the markup does not carry it fifteen times over. */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.grow { flex: 1; }
+.check { display: flex; align-items: center; gap: 4px; }
+.mb { margin-bottom: 12px; }
 @media (max-width: 1100px) { .cols.c2, .side { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------------------------------------------------------------- events */
@@ -277,10 +282,11 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
 <div id="tabs" hidden>
   <button data-tab="overview" aria-selected="true">Overview</button>
   <button data-tab="peers" aria-selected="false">Peers</button>
-  <button data-tab="events" aria-selected="false">Events</button>
-  <button data-tab="sequence" aria-selected="false">Sequence</button>
   <button data-tab="activity" aria-selected="false">Activity</button>
+  <button data-tab="sequence" aria-selected="false">Sequence</button>
   <button data-tab="relay" aria-selected="false">Relay</button>
+  <button data-tab="events" aria-selected="false">Events</button>
+
 </div>
 
 <main>
@@ -310,7 +316,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       <div id="notes"></div>
       <div id="stats" class="kvbar"></div>
 
-      <div class="p" style="margin-bottom:12px">
+      <div class="p mb">
         <div class="h"><span>All events over time</span><span class="sp"></span>
           <span class="dim" id="tl-meta"></span></div>
         <div class="chart"><canvas id="tl" height="200"></canvas><div id="tip" hidden></div></div>
@@ -320,7 +326,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         </div>
       </div>
 
-      <div class="p" style="margin-bottom:12px">
+      <div class="p mb">
         <div class="h">
           <span>Rate by type</span>
           <select id="gsel" title="Which group to break down"></select>
@@ -376,33 +382,33 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
 
     <!-- ------------------------------------------------------- peer page -->
     <div id="tab-peer" hidden>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+      <div class="toolbar">
         <button class="b" id="peer-back">&larr; all peers</button>
         <span class="mono" id="peer-title"></span>
-        <span style="flex:1"></span>
+        <span class="grow"></span>
         <button class="b" id="peer-events">Events &rarr;</button>
       </div>
       <div id="peer-missing"></div>
       <div id="peer-stats" class="kvbar"></div>
 
-      <div class="p" style="margin-bottom:12px">
+      <div class="p mb">
         <div class="h"><span>Traffic over this connection</span><span class="sp"></span>
           <span class="dim" id="ptl-meta"></span></div>
         <div class="chart"><canvas id="ptl" height="170"></canvas><div id="ptip" hidden></div></div>
         <div class="legend" id="ptl-legend"></div>
       </div>
 
-      <div class="cols c2" style="margin-bottom:12px">
+      <div class="cols c2 mb">
         <div class="p">
           <div class="h"><span>Messages by command</span></div>
           <div class="scroll" style="max-height:40vh"><table id="pcmd"></table></div>
         </div>
         <div>
-          <div class="p" style="margin-bottom:12px">
+          <div class="p mb">
             <div class="h"><span id="plife-head">Connection lifecycle</span></div>
             <div class="scroll" style="max-height:22vh"><table id="plife"></table></div>
           </div>
-          <div class="p" id="prelay-panel">
+          <div class="p">
             <div class="h"><span>Transaction relay</span></div>
             <div class="body" id="prelay"></div>
           </div>
@@ -421,7 +427,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
             <option value="200">200</option>
             <option value="500">500</option>
           </select>
-          <label class="dim" style="display:flex;align-items:center;gap:4px"
+          <label class="dim check"
                  title="Link each request to the reply it most likely caused">
             <input type="checkbox" id="pseq-ties" checked> link replies
           </label>
@@ -442,13 +448,12 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <!-- --------------------------------------------------------- events -->
     <div id="tab-events" hidden>
       <div id="enote"></div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
-        <span id="eback"></span>
+      <div class="toolbar">
         <select id="fgroup"><option value="">all groups</option></select>
         <select id="fkind"><option value="">all kinds</option></select>
         <input type="search" id="ftext" placeholder="kind or address">
         <span id="fchips" style="display:flex;gap:6px"></span>
-        <span style="flex:1"></span>
+        <span class="grow"></span>
         <span class="dim mono" id="ecount"></span>
       </div>
       <div class="side">
@@ -468,7 +473,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <!-- --------------------------------------------------------- activity -->
     <div id="tab-activity" hidden>
       <div id="anote"></div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+      <div class="toolbar">
         <span class="seg">
           <button id="asort-first" class="on" title="Connection order, so churn reads as a staircase">first seen</button><button id="asort-events" title="Busiest peers first">busiest</button>
         </span>
@@ -488,10 +493,10 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <option value="600000">connected 10m+</option>
           <option value="3600000">connected 1h+</option>
         </select>
-        <span style="flex:1"></span>
+        <span class="grow"></span>
         <span class="dim" id="acount"></span>
       </div>
-      <div class="p" style="margin-bottom:12px">
+      <div class="p mb">
         <div class="h">
           <span>How long connections lasted</span>
           <span class="seg">
@@ -519,7 +524,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <div id="tab-relay" hidden>
       <div id="rnote"></div>
       <div id="rstats" class="kvbar"></div>
-      <div class="cols c2" style="margin-bottom:12px">
+      <div class="cols c2 mb">
         <div class="p">
           <div class="h"><span>How far behind the losers were</span><span class="sp"></span>
             <span class="dim">announcement lag</span></div>
@@ -549,9 +554,9 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
 
     <!-- ------------------------------------------------------- sequence -->
     <div id="tab-sequence" hidden>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+      <div class="toolbar">
         <select id="seq-add"><option value="">add peer&hellip;</option></select>
-        <span style="flex:1"></span>
+        <span class="grow"></span>
         <button class="b" id="seq-prev">&larr; earlier</button>
         <span class="dim mono" id="seq-pos"></span>
         <button class="b" id="seq-next">later &rarr;</button>
@@ -560,7 +565,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <option value="200" selected>200</option>
           <option value="500">500</option>
         </select>
-        <label class="dim" style="display:flex;align-items:center;gap:4px"
+        <label class="dim check"
                title="Link each request to the reply it most likely caused. The archive records no txids, block hashes or ping nonces, so a reply that also arrives unsolicited — inv, headers, addr, cmpctblock — can be tied to the wrong request. Exchanges spanning a page boundary are not shown.">
           <input type="checkbox" id="seq-ties" checked> link replies
         </label>
@@ -657,7 +662,7 @@ const S = {
   hidden: { tl: new Set(), tl2: new Set(), ptl: new Set() },
   group: null,                      // group shown in the rate-by-type chart
   filter: { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' },
-  event: null, peer: null, returnToPeer: null, route: null,
+  event: null, peer: null, route: null,
   peerSort: { key: 'events', desc: true }, peerRows: [],
   peerMode: 'peers',                // 'peers' or 'networks'
   netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
@@ -666,7 +671,6 @@ const S = {
   relayRows: [], relaySort: { key: "first", desc: true },
   exchangeRows: [], exchangeSel: null,
   activity: null,
-  tab: 'overview',
 };
 
 /**
@@ -731,7 +735,7 @@ async function loadFiles(list) {
 
   S.dead = false;
   S.session = new Session(Number($('budget').value));
-  S.event = S.peer = S.returnToPeer = null;
+  S.event = S.peer = null;
   S.hidden.tl.clear(); S.hidden.tl2.clear();
   S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
   S.seq = { peers: [], offset: 0, selected: null, rows: [] };
@@ -843,16 +847,9 @@ function renderStats(seconds) {
       seconds ? `${(t.decompressedBytes / 1e6 / seconds).toFixed(0)} MB/s` : ''],
   ];
   if (t.decodeErrors) rows.push(['decode errors', num(t.decodeErrors), '']);
-
-  $('stats').replaceChildren(...rows.map(([k, v, note]) => {
-    const kv = el('div', 'kv');
-    kv.append(el('div', 'k', k));
-    const value = el('div', 'v', v);
-    if (note) value.append(el('small', null, note));
-    kv.append(value);
-    return kv;
-  }));
+  kvbar('stats', rows);
 }
+
 
 function renderNotes() {
   const { totals, retention, files } = S.summary;
@@ -901,21 +898,13 @@ function note(title, detail, kind) {
 function renderBreakdown() {
   const { breakdown, totals } = S.summary;
   const table = $('tbreak');
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [label, cls] of [['event', ''], ['count', 'n'], ['share', 'n'], ['', '']]) {
-    hr.append(el('th', cls, label));
-  }
-  thead.append(hr);
+  const thead = headRow([['event', ''], ['count', 'n'], ['share', 'n'], ['', '']]);
 
   const max = breakdown.length ? breakdown[0].count : 1;
   const tbody = el('tbody');
   for (const b of breakdown) {
     const tr = el('tr');
-    const first = el('td', 'm');
-    const sw = el('span', 'sw');
-    sw.style.background = groupColor(b.group);
-    first.append(sw, document.createTextNode(b.label));
+    const first = swatched('td', 'm', groupColor(b.group), b.label);
     const bar = el('span', 'barcell');
     bar.style.width = `${Math.max(2, (b.count / max) * 100)}%`;
     bar.style.background = groupColor(b.group);
@@ -931,31 +920,95 @@ function renderBreakdown() {
 
 function renderFiles() {
   const table = $('tfiles');
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [label, cls] of [['file', ''], ['created (UTC)', ''], ['low data', ''],
-                              ['size', 'n'], ['events', 'n'], ['state', '']]) {
-    hr.append(el('th', cls, label));
-  }
-  thead.append(hr);
+  const thead = headRow([['file', ''], ['created (UTC)', ''], ['low data', ''],
+    ['size', 'n'], ['events', 'n'], ['state', '']]);
   const tbody = el('tbody');
   for (const f of S.summary.files) {
     const state = f.error ? 'failed' : f.truncated ? 'truncated' : 'complete';
-    const tr = el('tr');
-    tr.append(
-      td(f.name, 'm'),
+    tbody.append(row(td(f.name, 'm'),
       td(f.created ? utc(f.created * 1000, false) : '—', 'm'),
       td(f.lowData === null ? 'unset' : String(f.lowData), ''),
       td(bytes(f.compressedBytes), 'n'),
       td(num(f.events), 'n'),
-      td(state, f.error ? 'm' : 'm dim'),
-    );
-    tbody.append(tr);
+      td(state, f.error ? 'm' : 'm dim'),));
   }
   table.replaceChildren(thead, tbody);
 }
 
+/* --------------------------------------------------------- table building */
+
 const td = (text, cls) => { const n = el('td', cls); n.textContent = text; return n; };
+
+/** A colour chip followed by its label, for legends, tooltips and tables. */
+function swatched(tag, cls, colour, label) {
+  const n = el(tag, cls);
+  const chip = el("span", "sw");
+  chip.style.background = colour;
+  n.append(chip, document.createTextNode(label));
+  return n;
+}
+
+/** A table row from its cells. */
+const row = (...cells) => { const n = el('tr'); n.append(...cells); return n; };
+
+/** A table head from `[label, class]` pairs. */
+function headRow(cols) {
+  const head = el('thead');
+  head.append(row(...cols.map(([label, cls]) => el('th', cls, label))));
+  return head;
+}
+
+/**
+ * A sortable table head.
+ *
+ * `cols` are `[key, label, numeric]`, and a column with no key is a plain
+ * header. `sort` is the caller's `{ key, desc }`, updated in place.
+ */
+function sortHead(cols, sort, redraw) {
+  const hr = el('tr');
+  for (const [key, label, numeric] of cols) {
+    const th = el('th', `${key ? 's' : ''}${numeric ? ' n' : ''}`);
+    th.textContent = label + (sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : '');
+    if (key) {
+      th.addEventListener('click', () => {
+        if (sort.key === key) sort.desc = !sort.desc;
+        else { sort.key = key; sort.desc = true; }
+        redraw();
+      });
+    }
+    hr.append(th);
+  }
+  const head = el('thead');
+  head.append(hr);
+  return head;
+}
+
+/** A table body from rows already built. */
+function bodyOf(rows) {
+  const body = el('tbody');
+  body.append(...rows);
+  return body;
+}
+
+/** A borderless two-column table of labelled values. */
+function facts(pairs) {
+  const table = el('table');
+  table.append(bodyOf(pairs.map(([k, v]) => row(td(k, 'dim'), td(String(v), 'm')))));
+  return table;
+}
+
+/** The compact key/value strip at the top of a view. */
+function kvbar(id, entries) {
+  $(id).replaceChildren(...entries.map(([key, value, note]) => {
+    const kv = el('div', 'kv');
+    kv.append(el('div', 'k', key));
+    const shown = el('div', 'v', value);
+    if (note) shown.append(el('small', null, note));
+    kv.append(shown);
+    return kv;
+  }));
+}
+
 
 /* ----------------------------------------------------------------- charts */
 
@@ -1098,10 +1151,9 @@ function legend(id, model, hidden, colorFor, redraw) {
   model.names.forEach((name, i) => {
     const total = model.series[i].reduce((a, b) => a + b, 0);
     if (!total && !hidden.has(name)) return;
-    const item = el('span', `it${hidden.has(name) ? ' off' : ''}`);
-    const sw = el('span', 'sw');
-    sw.style.background = colorFor(i, name);
-    item.append(sw, document.createTextNode(`${name} `), el('b', null, num(total)));
+    const item = swatched('span', `it${hidden.has(name) ? ' off' : ''}`,
+      colorFor(i, name), `${name} `);
+    item.append(el('b', null, num(total)));
     item.title = 'Click to show or hide';
     item.addEventListener('click', () => {
       hidden.has(name) ? hidden.delete(name) : hidden.add(name);
@@ -1148,13 +1200,8 @@ function chartInteraction(canvasId, tipId, brushable) {
       const table = el('table');
       const perSecond = Number(m.binMs) / 1000;
       for (const r of rows) {
-        const tr = el('tr');
-        const name = el('td');
-        const sw = el('span', 'sw');
-        sw.style.background = m.colorFor(r.s, r.name);
-        name.append(sw, document.createTextNode(r.name));
-        tr.append(name, td(num(r.v), 'n'));
-        table.append(tr);
+        table.append(row(swatched('td', null, m.colorFor(r.s, r.name), r.name),
+                         td(num(r.v), 'n')));
       }
       const sum = rows.reduce((a, r) => a + r.v, 0);
       const total = el('tr');
@@ -1221,30 +1268,15 @@ function paintPeers() {
         || (p.userAgent ?? "").toLowerCase().includes(needle))
     : S.peerRows;
 
-  // `userAgent` has no sort of its own: the clients view is where that
-  // question is answered, and a column here is for recognising a peer.
-  const cols = [["peerId", "peer", 1], ["addr", "address", 0], ["userAgent", "client", 0],
-                ["connType", "type", 0],
-                ["firstSeen", "first seen", 0], ["duration", "seen for", 1],
-                ["messagesIn", "in", 1], ["messagesOut", "out", 1],
-                ["bytesIn", "bytes in", 1], ["bytesOut", "bytes out", 1]];
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [key, label, isNum] of cols) {
-    const sortable = key !== 'userAgent';
-    const th = el('th', `${sortable ? 's' : ''}${isNum ? ' n' : ''}`);
-    th.textContent = label + (S.peerSort.key === key ? (S.peerSort.desc ? ' ↓' : ' ↑') : '');
-    if (sortable) {
-      th.addEventListener('click', () => {
-        if (S.peerSort.key === key) S.peerSort.desc = !S.peerSort.desc;
-        else S.peerSort = { key, desc: true };
-        renderPeers();
-      });
-    }
-    hr.append(th);
-  }
+  // `userAgent` has no sort of its own: the clients view answers that question,
+  // and the column here is for recognising a peer.
+  const cols = [['peerId', 'peer', 1], ['addr', 'address', 0], [null, 'client', 0],
+                ['connType', 'type', 0],
+                ['firstSeen', 'first seen', 0], ['duration', 'seen for', 1],
+                ['messagesIn', 'in', 1], ['messagesOut', 'out', 1],
+                ['bytesIn', 'bytes in', 1], ['bytesOut', 'bytes out', 1]];
+  const thead = sortHead(cols, S.peerSort, renderPeers);
 
-  thead.append(hr);
 
   const tbody = el('tbody');
   for (const p of rows.slice(0, 3000)) {
@@ -1294,9 +1326,8 @@ function renderPeerPage(peerId) {
   }
 
   $("peer-title").textContent = `peer ${peerId}   ${d.addr ?? ""}`;
-  $("peer-stats").replaceChildren(...[
+  kvbar("peer-stats", [
     ['user agent', d.userAgent ?? 'not seen', userAgentNote(d)],
-
     ["connection", d.connType ?? "unknown", d.network ? `network ${d.network}` : ""],
     ['seen for', dur(d.durationMs), `from ${utc(d.firstSeen, false)}`],
     ['messages', num(d.messagesIn + d.messagesOut),
@@ -1304,14 +1335,7 @@ function renderPeerPage(peerId) {
     ['bytes', bytes(d.bytesIn + d.bytesOut),
       `${bytes(d.bytesIn)} in / ${bytes(d.bytesOut)} out`],
     ['connection events', num(d.lifecycleTotal), ''],
-  ].map(([k, v, extra]) => {
-    const kv = el('div', 'kv');
-    kv.append(el('div', 'k', k));
-    const value = el('div', 'v', v);
-    if (extra) value.append(el('small', null, extra));
-    kv.append(value);
-    return kv;
-  }));
+  ]);
 
   drawPeerTimeline(peerId);
   renderPeerCommands(d);
@@ -1370,19 +1394,12 @@ function drawPeerTimeline(peerId) {
 
 function renderPeerCommands(d) {
   const table = $('pcmd');
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [l, c] of [['command', ''], ['in', 'n'], ['out', 'n'],
-                        ['bytes in', 'n'], ['bytes out', 'n']]) {
-    hr.append(el('th', c, l));
-  }
-  thead.append(hr);
+  const thead = headRow([['command', ''], ['in', 'n'], ['out', 'n'],
+    ['bytes in', 'n'], ['bytes out', 'n']]);
   const tbody = el('tbody');
   for (const c of d.commands) {
-    const tr = el('tr');
-    tr.append(td(c.command, 'm'), td(num(c.inbound), 'n'), td(num(c.outbound), 'n'),
-              td(bytes(c.inboundBytes), 'n'), td(bytes(c.outboundBytes), 'n'));
-    tbody.append(tr);
+    tbody.append(row(td(c.command, 'm'), td(num(c.inbound), 'n'), td(num(c.outbound), 'n'),
+              td(bytes(c.inboundBytes), 'n'), td(bytes(c.outboundBytes), 'n')));
   }
   table.replaceChildren(thead, tbody);
 }
@@ -1396,14 +1413,10 @@ function renderPeerLifecycle(d) {
     const extra = e.message ? e.message
       : e.lifetimeMs != null ? `lived ${dur(e.lifetimeMs)}`
       : e.existingConnections != null ? `${num(e.existingConnections)} existing` : '';
-    const tr = el('tr');
-    tr.append(td(utc(e.timestamp, false), 'm dim'), td(e.kind, 'm'), td(extra, 'dim'));
-    tbody.append(tr);
+    tbody.append(row(td(utc(e.timestamp, false), 'm dim'), td(e.kind, 'm'), td(extra, 'dim')));
   }
   if (!d.lifecycle.length) {
-    const tr = el('tr');
-    tr.append(td('no connection events for this peer', 'dim'));
-    tbody.append(tr);
+    tbody.append(row(td('no connection events for this peer', 'dim')));
   }
   $('plife').replaceChildren(tbody);
 }
@@ -1426,9 +1439,7 @@ function renderPeerRelay(d) {
       ? `${num(d.relay.duplicate)}, ${bytes(d.relay.duplicateBytes)} wasted`
       : 'none'],
   ]) {
-    const tr = el('tr');
-    tr.append(td(k, 'dim'), td(v, 'm'));
-    tbody.append(tr);
+    tbody.append(row(td(k, 'dim'), td(v, 'm')));
   }
   table.append(tbody);
   box.append(table);
@@ -1524,14 +1535,9 @@ function paintNetworks() {
     : S.netRows;
 
   const total = S.netRows.reduce((a, r) => a + r.peers, 0);
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [label, cls] of [['network', ''], ['name', ''], ['cc', ''], ['peers', 'n'],
-                              ['share', 'n'], ['inbound', 'n'], ['evicted', 'n'],
-                              ['evict%', 'n'], ['messages', 'n'], ['bytes', 'n']]) {
-    hr.append(el('th', cls, label));
-  }
-  thead.append(hr);
+  const thead = headRow([['network', ''], ['name', ''], ['cc', ''], ['peers', 'n'],
+    ['share', 'n'], ['inbound', 'n'], ['evicted', 'n'],
+    ['evict%', 'n'], ['messages', 'n'], ['bytes', 'n']]);
 
   const tbody = el('tbody');
   for (const r of rows.slice(0, 1000)) {
@@ -1571,8 +1577,7 @@ function selectNetwork(r) {
   panel.replaceChildren(head);
 
   const body = el('div', 'body');
-  const facts = el('table');
-  for (const [k, v] of [
+  body.append(facts([
     ['name', info?.description ?? (r.asn == null ? r.label : 'not in the ASN tables')],
     ['handle', info?.handle ?? '—'],
     ['country', info?.country ?? '—'],
@@ -1585,13 +1590,9 @@ function selectNetwork(r) {
     ['misbehaving', num(r.misbehaving)],
     ['first seen', utc(r.firstSeen, false)],
     ['last seen', utc(r.lastSeen, false)],
-  ]) {
-    const tr = el('tr');
-    tr.append(td(k, 'dim'), td(String(v), 'm'));
-    facts.append(tr);
-  }
-  body.append(facts);
+  ]));
   panel.append(body);
+
 
   const peers = callJson('networkPeers', r.asn == null ? -1 : r.asn, r.label, 200);
   if (peers && peers.rows.length) {
@@ -1672,31 +1673,23 @@ function renderAgents() {
     return;
   }
 
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [l, c] of [['client', ''], ['peers', 'n'], ['share', 'n'], ['', '']]) {
-    hr.append(el('th', c, l));
-  }
-  thead.append(hr);
+  const thead = headRow([['client', ''], ['peers', 'n'], ['share', 'n'], ['', '']]);
   const tbody = el('tbody');
   const peak = rows.length ? rows[0].peers : 1;
   for (const r of rows) {
-    const tr = el('tr');
     const bar = el('span', 'barcell');
     bar.style.width = `${Math.max(2, (r.peers / peak) * 100)}%`;
     bar.style.background = cssVar('--s1');
     const barCell = el('td');
     barCell.style.width = '140px';
     barCell.append(bar);
-    tr.append(td(r.userAgent, 'm'), td(num(r.peers), 'n'),
-              td(`${r.share.toFixed(2)}%`, 'n'), barCell);
-    tbody.append(tr);
+    tbody.append(row(td(r.userAgent, 'm'), td(num(r.peers), 'n'),
+                     td(`${r.share.toFixed(2)}%`, 'n'), barCell));
+
   }
   if (page.unknown) {
-    const tr = el('tr');
-    tr.append(td('(never named itself)', 'm dim'), td(num(page.unknown), 'n'),
-              td(`${(page.unknown * 100 / page.peers).toFixed(2)}%`, 'n dim'), el('td'));
-    tbody.append(tr);
+    tbody.append(row(td('(never named itself)', 'm dim'), td(num(page.unknown), 'n'),
+              td(`${(page.unknown * 100 / page.peers).toFixed(2)}%`, 'n dim'), el('td')));
   }
   table.replaceChildren(thead, tbody);
 }
@@ -1743,24 +1736,6 @@ function chips() {
     box.append(chip(`${utc(S.filter.timeFrom, false)} → ${utc(S.filter.timeTo, false)}`, clearRange));
   }
 
-  renderBack('eback');
-}
-
-/**
- * The way back to where you came from.
- *
- * Navigation is real browser history now, so this is the browser's own Back --
- * the button exists because the events and sequence tabs are reached from a
- * peer page and the way home should be visible, not because the app tracks it.
- */
-function renderBack(elementId) {
-  const box = $(elementId);
-  box.replaceChildren();
-  if (S.returnToPeer === null) return;
-  const b = el('button', 'b', `← peer ${S.returnToPeer}`);
-  b.title = 'Back to that peer';
-  b.addEventListener('click', () => history.back());
-  box.append(b);
 }
 
 
@@ -1797,13 +1772,10 @@ function paintEvents() {
   $('ecount').textContent = `${num(page.total)} of ${num(S.summary.totals.events)} events`;
 
   $('erows').replaceChildren(...page.rows.map((r) => {
-    const row = el('div', `er egrid${S.event === r.index ? ' on' : ''}`);
+    const line = el('div', `er egrid${S.event === r.index ? ' on' : ''}`);
     const arrow = r.inbound == null ? '' : (r.inbound ? '← ' : '→ ');
-    const kind = el('span');
-    const sw = el('span', 'sw');
-    sw.style.background = groupColor(r.group);
-    kind.append(sw, document.createTextNode(`${arrow}${r.label ?? '?'}`));
-    row.append(
+    const kind = swatched('span', null, groupColor(r.group), `${arrow}${r.label ?? '?'}`);
+    line.append(
       el('span', 'dim', String(r.index)),
       el('span', null, utc(r.timestamp)),
       kind,
@@ -1811,8 +1783,8 @@ function paintEvents() {
       el('span', 'dim', r.addr ?? '—'),
       el('span', 'r dim', r.size ? bytes(r.size) : '—'),
     );
-    row.addEventListener('click', () => selectEvent(r.index));
-    return row;
+    line.addEventListener('click', () => selectEvent(r.index));
+    return line;
   }));
 }
 
@@ -2102,11 +2074,11 @@ function activityAt(event) {
   const box = canvas.getBoundingClientRect();
   const x = event.clientX - box.left;
   const y = event.clientY - box.top;
-  const row = Math.floor((y - ACT.top) / ACT.row);
+  const rowIndex = Math.floor((y - ACT.top) / ACT.row);
   const column = Math.round(x - ACT.labels);
-  if (row < 0 || row >= model.rows.length) return null;
+  if (rowIndex < 0 || rowIndex >= model.rows.length) return null;
   if (column < 0 || column >= model.columns) return null;
-  return { peer: model.rows[row], column, x, y };
+  return { peer: model.rows[rowIndex], column, x, y };
 }
 
 function showActivityTip(event) {
@@ -2129,13 +2101,7 @@ function showActivityTip(event) {
     ['in', inbound ? unit(inbound) : '—', color(0)],
     ['out', outbound ? unit(outbound) : '—', color(1)],
   ]) {
-    const tr = el('tr');
-    const key = el('td');
-    const swatch = el('span', 'sw');
-    swatch.style.background = colour;
-    key.append(swatch, document.createTextNode(label));
-    tr.append(key, td(value, 'n'));
-    table.append(tr);
+    table.append(row(swatched('td', null, colour, label), td(value, 'n')));
   }
   const totals = el('tr');
   totals.append(td('all time', 'dim'), td(`${num(peer.messagesIn)} / ${num(peer.messagesOut)}`, 'n'));
@@ -2249,7 +2215,7 @@ function renderRelay() {
 
   const factor = page.duplicateFactor;
   const wasted = page.deliveries ? page.duplicateBytes : 0;
-  $('rstats').replaceChildren(...[
+  kvbar("rstats", [
     ['transactions', num(page.items), `${num(page.announcements)} announcements`],
     ['heard from', `${num(page.peers)}`, 'peers'],
     ['delivered', num(page.deliveries),
@@ -2257,14 +2223,7 @@ function renderRelay() {
     ['received twice over', factor == null ? '—' : `${factor.toFixed(2)}×`,
       wasted ? `${bytes(wasted)} spent again` : ''],
     ['median lag', page.lag.p50Ms == null ? '—' : dur(page.lag.p50Ms), 'behind the winner'],
-  ].map(([k, v, extra]) => {
-    const kv = el('div', 'kv');
-    kv.append(el('div', 'k', k));
-    const value = el('div', 'v', v);
-    if (extra) value.append(el('small', null, extra));
-    kv.append(value);
-    return kv;
-  }));
+  ]);
 
   distribution($('rlag'), page.lag, 'Every announcement was the first one.');
   distribution($('rheld'), page.heardToHeld, 'Nothing was both announced and delivered.');
@@ -2282,26 +2241,12 @@ function paintRelay() {
 
   // `first` and `late` are counts, so a long-lived peer wins on volume alone;
   // the win rate beside them is what makes two peers comparable.
-  const cols = [['peerId', 'peer', 0], ['addr', 'address', 0], ['first', 'first', 1],
+  const cols = [[null, 'peer', 0], [null, 'address', 0], ['first', 'first', 1],
                 ['win', 'win rate', 1], ['late', 'behind', 1], ['lag', 'median lag', 1],
                 ['delivered', 'delivered', 1], ['duplicate', 'dupes', 1],
                 ['duplicateBytes', 'wasted', 1]];
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [key, label, isNum] of cols) {
-    const sortable = key !== 'peerId' && key !== 'addr';
-    const th = el('th', `${sortable ? 's' : ''}${isNum ? ' n' : ''}`);
-    th.textContent = label + (S.relaySort.key === key ? (S.relaySort.desc ? ' ↓' : ' ↑') : '');
-    if (sortable) {
-      th.addEventListener('click', () => {
-        if (S.relaySort.key === key) S.relaySort.desc = !S.relaySort.desc;
-        else S.relaySort = { key, desc: true };
-        renderRelay();
-      });
-    }
-    hr.append(th);
-  }
-  thead.append(hr);
+  const thead = sortHead(cols, S.relaySort, renderRelay);
+
 
   const tbody = el('tbody');
   for (const p of rows.slice(0, 3000)) {
@@ -2348,71 +2293,71 @@ function renderExchanges() {
   }
 
   const table = $('texch');
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const [l, c] of [['request', 'm'], ['sent', 'n'], ['answered', 'n'],
-                        ['no reply', 'n'], ['unclear', 'n'], ['median', 'n']]) {
-    hr.append(el('th', c, l));
-  }
-  thead.append(hr);
+  const thead = headRow([['request', 'm'], ['sent', 'n'], ['answered', 'n'],
+    ['no reply', 'n'], ['unclear', 'n'], ['median', 'n']]);
 
-  const tbody = el('tbody');
-  let optional = false;
-  const uncaptured = [];
-  for (const r of page.rows) {
-    const tr = el('tr', r.request === S.exchangeSel ? 'on' : null);
+  const rows = page.rows.map((r) => {
     const name = el('td', 'm');
     name.textContent = r.request;
     name.title = `answered by ${r.replies.join(', ')}`;
+
     const noReply = el('td', 'n');
     if (r.optional) {
       // Not asking for what was announced is a choice, not a failure, so there
       // is no such thing as an unanswered one.
-      optional = true;
-      noReply.textContent = 'n/a';
       noReply.className = 'n dim';
+      noReply.textContent = 'n/a';
       noReply.title = 'an announcement this node chose not to act on is not a failed request';
     } else if (!r.repliesCaptured) {
       // The reply message type is absent from the whole archive, so every one
       // of these looks unanswered. That is the capture filter, not the peers.
-      uncaptured.push(`${r.request} (needs ${r.replies.join(' or ')})`);
-      noReply.textContent = 'not captured';
       noReply.className = 'n dim';
+      noReply.textContent = 'not captured';
       noReply.title = `no ${r.replies.join(' or ')} message appears anywhere in this archive, `
         + 'so nothing here could have been answered';
     } else {
       noReply.textContent = num(r.unanswered);
     }
-    const median = el('td', 'n');
-    median.textContent = r.peerLatency.p50Ms == null ? '—' : dur(r.peerLatency.p50Ms);
-    tr.append(name, td(num(r.opened), 'n'), td(num(r.answered), 'n'), noReply,
-              td(num(r.undetermined), 'n'), median);
-    tr.addEventListener('click', () => { S.exchangeSel = r.request; renderExchanges(); });
-    tbody.append(tr);
-  }
-  table.replaceChildren(thead, tbody);
-  renderExchangeLatency();
 
-  const foot = $('rexchnote');
-  foot.replaceChildren();
-  const lines = [
-    'Requests are paired with replies by command, direction and timing — the archive records ' +
-    'no txids or ping nonces. “Unclear” is requests whose fate could not be established, which ' +
-    'is where Bitcoin Core keeps several in flight at once and a later one says nothing about ' +
-    'an earlier one.',
-  ];
+    const tr = row(name, td(num(r.opened), 'n'), td(num(r.answered), 'n'), noReply,
+                   td(num(r.undetermined), 'n'),
+                   td(r.peerLatency.p50Ms == null ? '—' : dur(r.peerLatency.p50Ms), 'n'));
+    if (r.request === S.exchangeSel) tr.className = 'on';
+    tr.addEventListener('click', () => { S.exchangeSel = r.request; renderExchanges(); });
+    return tr;
+  });
+
+  table.replaceChildren(thead, bodyOf(rows));
+  renderExchangeLatency();
+  exchangeCaveats(page.rows);
+}
+
+/**
+ * What the numbers above do not say. Stated once under the table rather than
+ * per row, and only the parts that apply to this archive.
+ */
+function exchangeCaveats(rows) {
+  const uncaptured = rows.filter((r) => !r.optional && !r.repliesCaptured);
+  const lines = [];
   if (uncaptured.length) {
-    lines.unshift('This archive does not contain the messages that would answer '
-      + `${uncaptured.join(', ')}. The producing run captured only some message types, and the `
-      + 'header does not record which, so those requests only look unanswered.');
+    lines.push('This archive does not contain the messages that would answer '
+      + `${uncaptured.map((r) => `${r.request} (needs ${r.replies.join(' or ')})`).join(', ')}. `
+      + 'The producing run captured only some message types, and the header does not record '
+      + 'which, so those requests only look unanswered.');
   }
-  if (optional) {
-    lines.push('An announcement (inv, cmpctblock) is not a request: this node acts on a fraction ' +
-      'of what it is told about, so those are never counted as unanswered.');
+  lines.push('Requests are paired with replies by command, direction and timing — the archive '
+    + 'records no txids or ping nonces. “Unclear” is requests whose fate could not be '
+    + 'established, which is where Bitcoin Core keeps several in flight at once and a later '
+    + 'one says nothing about an earlier one.');
+  if (rows.some((r) => r.optional)) {
+    lines.push('An announcement (inv, cmpctblock) is not a request: this node acts on a fraction '
+      + 'of what it is told about, so those are never counted as unanswered.');
   }
-  for (const line of lines) foot.append(el('div', null, line));
+  const foot = $('rexchnote');
+  foot.replaceChildren(...lines.map((line) => el('div', null, line)));
   foot.style.whiteSpace = 'normal';
 }
+
 
 /**
  * Reply times for the selected request kind, one side at a time.
@@ -2424,22 +2369,22 @@ function renderExchanges() {
 function renderExchangeLatency() {
   const box = $('rlat');
   box.replaceChildren();
-  const row = S.exchangeRows.find((r) => r.request === S.exchangeSel);
-  if (!row) return;
+  const selected = S.exchangeRows.find((r) => r.request === S.exchangeSel);
+  if (!selected) return;
 
   const sides = [
-    ['peers answered', row.peerLatency, row.unansweredByPeers, 'No peer answered one of these.'],
-    ['this node answered', row.ourLatency, row.unansweredByUs, 'This node was never asked.'],
+    ['peers answered', selected.peerLatency, selected.unansweredByPeers, 'No peer answered one of these.'],
+    ['this node answered', selected.ourLatency, selected.unansweredByUs, 'This node was never asked.'],
   ];
   for (const [label, l, silent, empty] of sides) {
     const head = el('div', 'dim');
     head.style.cssText = 'margin-top:8px;font-family:var(--mono);font-size:11px';
-    head.textContent = `${row.request} — ${label}`;
+    head.textContent = `${selected.request} — ${label}`;
     box.append(head);
     const chart = el('div');
     distribution(chart, l, empty);
     box.append(chart);
-    if (silent && !row.optional && row.repliesCaptured) {
+    if (silent && !selected.optional && selected.repliesCaptured) {
       const line = el('div', 'dim');
       line.style.fontSize = '11px';
       line.textContent = `${num(silent)} more went unanswered.`;
@@ -2478,6 +2423,13 @@ const svg = (tag, attrs = {}) => {
   for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
   return n;
 };
+
+/** An SVG text node with its content. */
+function svgText(attrs, text) {
+  const n = svg("text", attrs);
+  n.textContent = text;
+  return n;
+}
 
 function seqLimit(view) {
   return Number($(view.limit).value);
@@ -2553,34 +2505,33 @@ function exchangeBrackets(ties) {
 function drawSequence(view) {
   if (!S.session || S.dead) return;
   const state = view.state();
-
   const node = $(view.svg);
-  node.replaceChildren();
   const note = $(view.note);
+  node.replaceChildren();
   note.replaceChildren();
 
   if (!state.peers.length) {
-    $(view.pos).textContent = "";
-    note.append(el("div", "msg info", "Add a peer to draw its message exchange."));
+    $(view.pos).textContent = '';
+    note.append(el('div', 'msg info', 'Add a peer to draw its message exchange.'));
     return;
   }
 
   // Messages and connection events for the chosen peers, in archive order,
   // honouring the time range brushed on the overview.
-  const filter = {
+  const page = callJson('sequence', JSON.stringify({
     groups: ['message', 'connection'],
     kinds: [],
     peerIds: state.peers,
     timeFrom: S.filter.timeFrom,
     timeTo: S.filter.timeTo,
     text: '',
-  };
-  const page = callJson("sequence", JSON.stringify(filter), state.offset, seqLimit(view));
+  }), state.offset, seqLimit(view));
   if (!page) return;
   state.rows = page.rows;
 
   const first = page.total ? state.offset + 1 : 0;
-  $(view.pos).textContent = `${num(first)}–${num(state.offset + page.rows.length)} of ${num(page.total)}`;
+  $(view.pos).textContent =
+    `${num(first)}–${num(state.offset + page.rows.length)} of ${num(page.total)}`;
   $(view.prev).disabled = state.offset === 0;
   $(view.next).disabled = state.offset + seqLimit(view) >= page.total;
 
@@ -2590,6 +2541,32 @@ function drawSequence(view) {
     return;
   }
 
+  const ctx = seqLayout(view, page, state);
+  node.setAttribute('width', ctx.width);
+  node.setAttribute('height', ctx.height);
+  node.setAttribute('viewBox', `0 0 ${ctx.width} ${ctx.height}`);
+  $(view.scroll).style.maxHeight = view.maxHeight ?? 'calc(100vh - 190px)';
+
+  seqHeaders(node, ctx);
+  const rowEls = seqRows(node, ctx);
+  seqBrackets(node, ctx, rowEls);
+
+  if (ctx.brackets.length) {
+    // One line, not a banner: the caveat is worth stating but it is the same
+    // caveat on every draw. The rest of it is on the toggle's tooltip.
+    const caption = el('div', 'dim',
+      `${num(ctx.ties.length)} replies linked to ${num(ctx.brackets.length)} requests, `
+      + 'inferred from command, direction and timing rather than from txids.');
+    caption.style.margin = '0 0 6px';
+    note.append(caption);
+  }
+}
+
+/**
+ * Everything the three drawing steps below need: the page, the geometry, and
+ * the exchange brackets that decide how wide the left gutter has to be.
+ */
+function seqLayout(view, page, state) {
   // Exchanges are matched within the page, so a request answered on the next
   // screenful simply has no bracket. Turning them off is worth having: on a
   // busy peer nearly every row takes part in one.
@@ -2599,54 +2576,44 @@ function drawSequence(view) {
     ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
     : 0;
   const gutter = SEQ.gutter + tieWidth;
-
   const lanes = state.peers;
-  const width = gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad;
-  const height = SEQ.top + page.rows.length * SEQ.row + SEQ.pad;
-  node.setAttribute('width', width);
-  node.setAttribute('height', height);
-  node.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  $(view.scroll).style.maxHeight = view.maxHeight ?? 'calc(100vh - 190px)';
-
   const laneX = (i) => gutter + SEQ.lane * i + SEQ.lane / 2;
-  const rowY = (i) => SEQ.top + i * SEQ.row + SEQ.row / 2;
-  const nodeX = laneX(0);
-  const peerX = (peerId) => laneX(lanes.indexOf(peerId) + 1);
-  // Fixed categorical slot per lane, never cycled: at most six lifelines are
-  // allowed and the palette has eight hues.
-  const peerColour = (peerId) => color(Math.max(0, lanes.indexOf(peerId)));
 
-  /**
-   * An opaque plate to sit under a label. An arrow to a distant lane crosses
-   * the lifelines in between, and a label straddling one is unreadable without
-   * this. Width comes from the character count rather than `getBBox`, which
-   * reports nothing while the tab is still hidden; the diagram is monospaced,
-   * so counting is accurate.
-   */
-  const plate = (text, cx, baseline) => {
-    const w = text.length * 6.7 + 8;
-    return svg('rect', { class: 'plate', x: cx - w / 2, y: baseline - 10, width: w, height: 13, rx: 2 });
+  return {
+    view, page, state, ties, brackets, tieWidth, gutter, lanes, laneX,
+    width: gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad,
+    height: SEQ.top + page.rows.length * SEQ.row + SEQ.pad,
+    rowY: (i) => SEQ.top + i * SEQ.row + SEQ.row / 2,
+    nodeX: laneX(0),
+    peerX: (peerId) => laneX(lanes.indexOf(peerId) + 1),
+    // Fixed categorical slot per lane, never cycled: at most six lifelines are
+    // allowed and the palette has eight hues.
+    peerColour: (peerId) => color(Math.max(0, lanes.indexOf(peerId))),
+    // How long each reply took, for the label on the reply's arrow.
+    elapsedOf: new Map(ties.map((t) => [t.reply, t.elapsedMs])),
   };
+}
 
-  // Gutter column headers. The date lives here, once, so each row needs only a
-  // time of day — a full timestamp on every row is wide enough to run into the
-  // delta column beside it.
+/** Column headers in the gutter, and a lifeline per actor. */
+function seqHeaders(node, ctx) {
+  const { page, lanes, laneX, tieWidth, gutter, height, view } = ctx;
+
+  // The date lives here, once, so each row needs only a time of day — a full
+  // timestamp on every row is wide enough to run into the delta column beside
+  // it.
   const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
-  const dayLabel = svg('text', { class: 'headsub', x: tieWidth + 10, y: 22 });
-  dayLabel.textContent = days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0];
-  node.append(dayLabel);
-  const dayUnit = svg('text', { class: 'headsub', x: tieWidth + 10, y: 34 });
-  dayUnit.textContent = 'UTC';
-  node.append(dayUnit);
-  const deltaHead = svg('text', { class: 'headsub', x: gutter - 14, y: 34, 'text-anchor': 'end' });
-  deltaHead.textContent = 'since prev';
-  node.append(deltaHead);
+  node.append(
+    svgText({ class: 'headsub', x: tieWidth + 10, y: 22 },
+      days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0]),
+    svgText({ class: 'headsub', x: tieWidth + 10, y: 34 }, 'UTC'),
+    svgText({ class: 'headsub', x: gutter - 14, y: 34, 'text-anchor': 'end' }, 'since prev'),
+  );
 
   const heads = [{ title: 'this node', sub: '' }].concat(
-    lanes.map((id) => {
-      const peer = S.peerRows.find((p) => p.peerId === id);
-      return { title: `peer ${id}`, sub: peer?.addr ?? '' };
-    }),
+    lanes.map((id) => ({
+      title: `peer ${id}`,
+      sub: S.peerRows.find((p) => p.peerId === id)?.addr ?? '',
+    })),
   );
   heads.forEach((head, i) => {
     const x = laneX(i);
@@ -2656,56 +2623,51 @@ function drawSequence(view) {
     const life = svg('line', {
       class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad,
     });
-    // Inline style, not a presentation attribute: `#seq .life` and `#seq .head`
+    // Inline style, not a presentation attribute: `.seqsvg .life` and `.head`
     // already set `stroke`, and any CSS rule beats a presentation attribute.
     if (colour) {
       life.style.stroke = colour;
       life.style.strokeOpacity = '0.5';
     }
-    node.append(life);
     const w = SEQ.lane - 26;
     const box = svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 });
     if (colour) box.style.stroke = colour;
-    node.append(box);
+    node.append(life, box);
     // Centre the title in the box when there is no subtitle under it.
-    const t = svg('text', { class: 'headtext', x, y: head.sub ? 22 : 28, 'text-anchor': 'middle' });
-    t.textContent = head.title;
-    node.append(t);
+    node.append(svgText(
+      { class: 'headtext', x, y: head.sub ? 22 : 28, 'text-anchor': 'middle' }, head.title));
     if (head.sub) {
-      const s = svg('text', { class: 'headsub', x, y: 34, 'text-anchor': 'middle' });
-      s.textContent = head.sub.length > 26 ? head.sub.slice(0, 25) + '…' : head.sub;
-      node.append(s);
+      node.append(svgText({ class: 'headsub', x, y: 34, 'text-anchor': 'middle' },
+        head.sub.length > 26 ? `${head.sub.slice(0, 25)}…` : head.sub));
     }
-    // Remove a lifeline from its own header, rather than from a separate list
-    // of chips above the diagram. Lane 0 is this node, which cannot be removed.
+    // Removing a lifeline happens on its own header rather than from a list of
+    // chips above the diagram. Lane 0 is this node, which cannot be removed,
+    // and a view with no picker cannot put one back.
     if (i > 0 && view.removable) {
-      const cx = x + w / 2 - 11;
-      const cy = 22;
-      const rm = svg('g', { class: 'rm' });
-      rm.append(svg('rect', { class: 'rmhit', x: cx - 9, y: cy - 9, width: 18, height: 18 }));
-      const cross = svg('text', { class: 'rmx', x: cx, y: cy + 4, 'text-anchor': 'middle' });
-      cross.textContent = '×';
-      rm.append(cross);
-      const tip = svg('title');
-      tip.textContent = `Remove peer ${lanes[i - 1]} from the diagram`;
-      rm.append(tip);
-      rm.addEventListener('click', (event) => {
-        event.stopPropagation();
-        seqRemovePeer(view, lanes[i - 1]);
-      });
-      node.append(rm);
+      node.append(seqRemoveControl(x + w / 2 - 11, 22, view, lanes[i - 1]));
     }
   });
+}
 
-  // How long each reply took, and which exchange a row takes part in.
-  const elapsedOf = new Map(ties.map((t) => [t.reply, t.elapsedMs]));
-  const bracketAt = new Map();
-  for (const bracket of brackets) {
-    for (const position of [bracket.request, ...bracket.replies.map((t) => t.reply)]) {
-      if (!bracketAt.has(position)) bracketAt.set(position, []);
-      bracketAt.get(position).push(bracket);
-    }
-  }
+function seqRemoveControl(cx, cy, view, peerId) {
+  const rm = svg('g', { class: 'rm' });
+  const tip = svg('title');
+  tip.textContent = `Remove peer ${peerId} from the diagram`;
+  rm.append(
+    svg('rect', { class: 'rmhit', x: cx - 9, y: cy - 9, width: 18, height: 18 }),
+    svgText({ class: 'rmx', x: cx, y: cy + 4, 'text-anchor': 'middle' }, '×'),
+    tip,
+  );
+  rm.addEventListener('click', (event) => {
+    event.stopPropagation();
+    seqRemovePeer(view, peerId);
+  });
+  return rm;
+}
+
+/** One row per message, returned so the brackets can light them up. */
+function seqRows(node, ctx) {
+  const { page, state, view, tieWidth, gutter, width, rowY, nodeX, peerX, peerColour } = ctx;
 
   // Label plates go in their own layer, under every row: they knock the
   // lifelines out from under a label, but must stay below the row hover fill,
@@ -2719,65 +2681,30 @@ function drawSequence(view) {
     const y = rowY(i);
     const g = svg('g', { class: `row${state.selected === r.index ? ' on' : ''}` });
     rowEls[i] = g;
-
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
 
     // Gutter: time of day on the left, gap since the previous message on the
     // right. The date is in the column header, so these two never collide.
-    const time = svg('text', { class: 'gutter', x: tieWidth + 10, y: y + 3.5 });
-    time.textContent = utc(r.timestamp).slice(11);
-    g.append(time);
-    if (previous !== null) {
-      const gap = r.timestamp - previous;
-      if (gap > 0) {
-        const delta = svg('text', {
-          class: 'gutter', x: gutter - 14, y: y + 3.5, 'text-anchor': 'end',
-        });
-        delta.textContent = `+${dur(gap)}`;
-        g.append(delta);
-      }
+    g.append(svgText({ class: 'gutter', x: tieWidth + 10, y: y + 3.5 },
+      utc(r.timestamp).slice(11)));
+    if (previous !== null && r.timestamp - previous > 0) {
+      g.append(svgText({ class: 'gutter', x: gutter - 14, y: y + 3.5, 'text-anchor': 'end' },
+        `+${dur(r.timestamp - previous)}`));
     }
     previous = r.timestamp;
 
-    const px = peerX(r.peerId);
     const colour = peerColour(r.peerId);
-
     if (r.group === 'connection') {
       // Lifecycle events are not an exchange, so they are a note on the peer's
       // own lifeline rather than an arrow.
+      const px = peerX(r.peerId);
       const w = 132;
       const box = svg('rect', { class: 'note', x: px - w / 2, y: y - 8, width: w, height: 16, rx: 2 });
       box.style.stroke = colour;
-      g.append(box);
-      const t = svg('text', { class: 'notetext', x: px, y: y + 3.5, 'text-anchor': 'middle' });
-      t.textContent = r.kind ?? '';
-      g.append(t);
+      g.append(box, svgText({ class: 'notetext', x: px, y: y + 3.5, 'text-anchor': 'middle' },
+        r.kind ?? ''));
     } else {
-      const inbound = r.inbound === true;
-      const from = inbound ? px : nodeX;
-      const to = inbound ? nodeX : px;
-      const dir = Math.sign(to - from) || 1;
-      const end = to - dir * 5;
-      g.append(svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: colour }));
-      g.append(svg('path', {
-        d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
-        fill: colour,
-      }));
-      // The label stays in a text token rather than the peer's colour: three of
-      // the palette's hues sit below 3:1 on the light surface and are unreadable
-      // at 11px. The arrow carries the identity; the label carries the words.
-      const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
-      const elapsed = elapsedOf.has(i) ? ` ↩ ${dur(elapsedOf.get(i))}` : '';
-      const cx = (from + to) / 2;
-      plates.append(plate(main + elapsed, cx, y - 5));
-      const label = svg('text', { class: 'label', x: cx, y: y - 5, 'text-anchor': 'middle' });
-      label.textContent = main;
-      if (elapsed) {
-        const span = svg('tspan', { class: 'elapsed' });
-        span.textContent = elapsed;
-        label.append(span);
-      }
-      g.append(label);
+      seqArrow(g, plates, ctx, r, i, y, colour);
     }
 
     g.addEventListener('click', () => {
@@ -2787,18 +2714,62 @@ function drawSequence(view) {
     });
     node.append(g);
   });
+  return rowEls;
+}
 
-  // Exchange brackets, drawn last so a hovered row's highlight does not cover
-  // them. They take no pointer events of their own: the rows drive the focus.
+/** One message as an arrow between two lifelines, with its label. */
+function seqArrow(g, plates, ctx, r, i, y, colour) {
+  const inbound = r.inbound === true;
+  const px = ctx.peerX(r.peerId);
+  const from = inbound ? px : ctx.nodeX;
+  const to = inbound ? ctx.nodeX : px;
+  const dir = Math.sign(to - from) || 1;
+  const end = to - dir * 5;
+  g.append(
+    svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: colour }),
+    svg('path', {
+      d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
+      fill: colour,
+    }),
+  );
+
+  // The label stays in a text token rather than the peer's colour: three of the
+  // palette's hues sit below 3:1 on the light surface and are unreadable at
+  // 11px. The arrow carries the identity; the label carries the words.
+  const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
+  const elapsed = ctx.elapsedOf.has(i) ? ` ↩ ${dur(ctx.elapsedOf.get(i))}` : '';
+  const cx = (from + to) / 2;
+  // An arrow to a distant lane crosses the lifelines in between, and a label
+  // straddling one is unreadable without a plate under it. The width comes from
+  // the character count rather than `getBBox`, which reports nothing while the
+  // tab is hidden; the diagram is monospaced, so counting is accurate.
+  const plateWidth = (main + elapsed).length * 6.7 + 8;
+  plates.append(svg('rect', {
+    class: 'plate', x: cx - plateWidth / 2, y: y - 15, width: plateWidth, height: 13, rx: 2,
+  }));
+
+  const label = svgText({ class: 'label', x: cx, y: y - 5, 'text-anchor': 'middle' }, main);
+  if (elapsed) {
+    const span = svg('tspan', { class: 'elapsed' });
+    span.textContent = elapsed;
+    label.append(span);
+  }
+  g.append(label);
+}
+
+/**
+ * Exchange brackets, drawn last so a hovered row's highlight does not cover
+ * them. They take no pointer events of their own: the rows drive the focus.
+ */
+function seqBrackets(node, ctx, rowEls) {
+  const { page, brackets, rowY, peerColour } = ctx;
+  const bracketAt = new Map();
   for (const bracket of brackets) {
     const x = 8 + bracket.depth * SEQ.tie;
-    const top = rowY(bracket.request);
     // The spine runs from the request to the last reply, with a tick out to
     // each reply along the way.
-    const spine = `M ${x + 5} ${top} H ${x} V ${rowY(bracket.last)}`;
-    const ticks = bracket.replies
-      .map((tie) => ` M ${x} ${rowY(tie.reply)} H ${x + 5}`)
-      .join('');
+    const spine = `M ${x + 5} ${rowY(bracket.request)} H ${x} V ${rowY(bracket.last)}`;
+    const ticks = bracket.replies.map((tie) => ` M ${x} ${rowY(tie.reply)} H ${x + 5}`).join('');
     const path = svg('path', { class: 'tie', d: spine + ticks });
     path.style.stroke = peerColour(page.rows[bracket.request].peerId);
 
@@ -2811,14 +2782,17 @@ function drawSequence(view) {
       : `${request} → ${answers.length} replies, `
         + `${dur(Math.min(...spread))} to ${dur(Math.max(...spread))}`;
     path.append(tip);
-
-    bracket.el = path;
     node.append(path);
+
+    for (const position of [bracket.request, ...bracket.replies.map((t) => t.reply)]) {
+      if (!bracketAt.has(position)) bracketAt.set(position, []);
+      bracketAt.get(position).push({ bracket, path });
+    }
   }
 
   const focus = (position, on) => {
-    for (const bracket of bracketAt.get(position) ?? []) {
-      bracket.el?.classList.toggle('on', on);
+    for (const { bracket, path } of bracketAt.get(position) ?? []) {
+      path.classList.toggle('on', on);
       rowEls[bracket.request]?.classList.toggle('tied', on);
       for (const tie of bracket.replies) rowEls[tie.reply]?.classList.toggle('tied', on);
     }
@@ -2827,22 +2801,14 @@ function drawSequence(view) {
     rowEls[position]?.addEventListener('mouseenter', () => focus(position, true));
     rowEls[position]?.addEventListener('mouseleave', () => focus(position, false));
   }
-
-  if (brackets.length) {
-    // One line, not a banner: the caveat is worth stating but it is the same
-    // caveat on every draw. The rest of it is on the toggle's tooltip.
-    const caption = el('div', 'dim',
-      `${num(ties.length)} replies linked to ${num(brackets.length)} requests, `
-      + 'inferred from command, direction and timing rather than from txids.');
-    caption.style.margin = '0 0 6px';
-    note.append(caption);
-  }
 }
+
 
 
 /* ---------------------------------------------------------------- routing */
 
-const TABS = ['overview', 'peers', 'peer', 'events', 'sequence', 'relay', 'activity'];
+// Display order, with the peer page tucked in beside the list it belongs to.
+const TABS = ["overview", "peers", "peer", "activity", "sequence", "relay", "events"];
 
 /**
  * Navigation goes through the browser's own history, so Back does what Back
@@ -2888,10 +2854,21 @@ function openPeer(peerId) {
   navigate({ tab: 'peer', peerId });
 }
 
+/** What each tab draws when it is revealed. Canvas and SVG have no size while
+ *  hidden, so nothing can be drawn until then. */
+const DRAW = {
+  overview: drawBoth,
+  peers: () => { if (S.peerMode === 'peers') paintPeers(); },
+  peer: (route) => renderPeerPage(route.peerId),
+  events: refreshEvents,
+  sequence: () => { buildSeqPicker(); drawSequence(SEQ_TAB); },
+  relay: renderRelay,
+  activity: () => { renderDurations(); drawActivity(); },
+};
+
 /** Show a route. Never touches history: `popstate` calls this too. */
 function showRoute(route) {
   S.route = route;
-  S.tab = route.tab;
   // A peer page belongs to the peer list, so that tab stays lit and Back is an
   // obvious way home.
   const lit = route.tab === 'peer' ? 'peers' : route.tab;
@@ -2899,25 +2876,24 @@ function showRoute(route) {
     b.setAttribute('aria-selected', String(b.dataset.tab === lit));
   }
   for (const t of TABS) $(`tab-${t}`).hidden = t !== route.tab;
-  // The "back to peer N" button on the events tab belongs to the trip that
-  // started at that peer. Leaving this tab ends the trip, and the browser's own
-  // Back takes over from here.
-  if (route.tab !== 'events') S.returnToPeer = null;
-
-
-  // Canvas and SVG have no size while hidden, so they are drawn on reveal.
-  if (!S.session || S.dead) return;
-  if (route.tab === 'overview') drawBoth();
-  if (route.tab === "peers" && S.peerMode === "peers") paintPeers();
-  if (route.tab === 'peer') renderPeerPage(route.peerId);
-  if (route.tab === 'events') refreshEvents();
-  if (route.tab === 'sequence') { buildSeqPicker(); drawSequence(SEQ_TAB); }
-  if (route.tab === 'relay') renderRelay();
-  if (route.tab === "activity") { renderDurations(); drawActivity(); }
+  if (S.session && !S.dead) DRAW[route.tab]?.(route);
 }
+
 
 /* ------------------------------------------------------------------ setup */
 function setup() {
+  wireFileLoading();
+  wireNavigation();
+  wireFilters();
+  wireSequence(SEQ_TAB);
+  wireSequence(SEQ_PEER);
+  wireActivity();
+  chartInteraction('tl', 'tip', true);
+  chartInteraction('tl2', 'tip2', false);
+  chartInteraction('ptl', 'ptip', false);
+}
+
+function wireFileLoading() {
   const open = () => $('file').click();
   $('pick').addEventListener('click', open);
   $('pick2').addEventListener('click', open);
@@ -2932,144 +2908,134 @@ function setup() {
     $('barfiles').replaceChildren();
   });
 
-  for (const b of document.querySelectorAll('#tabs button')) {
-    b.addEventListener('click', () => showTab(b.dataset.tab));
-  }
-
+  // `dragenter` and `dragleave` fire for every element the pointer crosses, so
+  // the overlay is tied to a depth count rather than to the last event seen.
   let depth = 0;
+  const dropped = () => {
+    depth = 0;
+    $('overlay').hidden = true;
+    document.body.classList.remove('drag');
+  };
   window.addEventListener('dragenter', (e) => {
     e.preventDefault();
     if (++depth === 1) { $('overlay').hidden = false; document.body.classList.add('drag'); }
   });
   window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('dragleave', () => {
-    if (--depth <= 0) { depth = 0; $('overlay').hidden = true; document.body.classList.remove('drag'); }
-  });
+  window.addEventListener('dragleave', () => { if (--depth <= 0) dropped(); });
   window.addEventListener('drop', (e) => {
     e.preventDefault();
-    depth = 0;
-    $('overlay').hidden = true;
-    document.body.classList.remove('drag');
+    dropped();
     if (e.dataTransfer?.files?.length) loadFiles([...e.dataTransfer.files]);
   });
+}
 
+function wireNavigation() {
+  for (const b of document.querySelectorAll('#tabs button')) {
+    b.addEventListener('click', () => showTab(b.dataset.tab));
+  }
+  for (const mode of ['peers', 'networks', 'agents']) {
+    $(`mode-${mode === 'networks' ? 'nets' : mode}`)
+      .addEventListener('click', () => showPeerMode(mode));
+  }
+  $('peer-back').addEventListener('click', () => history.back());
+  $('peer-events').addEventListener('click', () => {
+    S.filter.peerIds = [S.peer];
+    chips();
+    showTab('events');
+  });
+
+  // Back and forward are the browser's, so these must not push history again.
+  window.addEventListener('popstate', (event) => {
+    showRoute(event.state ?? routeOf(location.hash));
+  });
+
+  let resizing;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizing);
+    // Everything that sizes itself to the viewport just redraws, and the router
+    // already knows what that is.
+    resizing = setTimeout(() => showRoute(S.route ?? { tab: 'overview' }), 120);
+  });
+}
+
+function wireFilters() {
   $('gsel').addEventListener('change', (e) => {
     S.group = e.target.value;
     S.hidden.tl2.clear();
     drawBoth();
   });
-  $('fgroup').addEventListener('change', (e) => {
-    S.filter.groups = e.target.value ? [e.target.value] : [];
+  const refilter = (apply) => (e) => {
+    apply(e.target.value);
     $('eview').scrollTop = 0;
     refreshEvents();
-  });
-  $('fkind').addEventListener('change', (e) => {
-    S.filter.kinds = e.target.value ? [Number(e.target.value)] : [];
-    $('eview').scrollTop = 0;
-    refreshEvents();
-  });
+  };
+  $('fgroup').addEventListener('change',
+    refilter((v) => { S.filter.groups = v ? [v] : []; }));
+  $('fkind').addEventListener('change',
+    refilter((v) => { S.filter.kinds = v ? [Number(v)] : []; }));
   let typing;
   $('ftext').addEventListener('input', (e) => {
     clearTimeout(typing);
+    const value = e.target.value.trim();
     typing = setTimeout(() => {
-      S.filter.text = e.target.value.trim();
+      S.filter.text = value;
       $('eview').scrollTop = 0;
       refreshEvents();
     }, 180);
   });
-  $("psearch").addEventListener("input", () => {
-    if (S.peerMode === "peers") paintPeers();
-    else if (S.peerMode === "agents") renderAgents();
-    else paintNetworks();
-  });
   $('eview').addEventListener('scroll', refreshEvents, { passive: true });
 
-  $('mode-peers').addEventListener('click', () => showPeerMode('peers'));
-  $("mode-nets").addEventListener("click", () => showPeerMode("networks"));
-  $("mode-agents").addEventListener("click", () => showPeerMode("agents"));
-
+  $('psearch').addEventListener('input', () => {
+    if (S.peerMode === 'peers') paintPeers();
+    else if (S.peerMode === 'agents') renderAgents();
+    else paintNetworks();
+  });
+  $('rsearch').addEventListener('input', paintRelay);
   $('seq-add').addEventListener('change', (e) => {
     if (e.target.value) seqAddPeer(Number(e.target.value));
     e.target.value = '';
   });
-  $('seq-prev').addEventListener('click', () => {
-    S.seq.offset = Math.max(0, S.seq.offset - seqLimit(SEQ_TAB));
-    drawSequence(SEQ_TAB);
-  });
-  $('seq-next').addEventListener('click', () => {
-    S.seq.offset += seqLimit(SEQ_TAB);
-    drawSequence(SEQ_TAB);
-  });
-  $('seq-limit').addEventListener('change', () => { S.seq.offset = 0; drawSequence(SEQ_TAB); });
-  $('seq-ties').addEventListener('change', () => drawSequence(SEQ_TAB));
+}
 
-  $('peer-back').addEventListener('click', () => history.back());
-  $('peer-events').addEventListener('click', () => {
-    S.filter.peerIds = [S.peer];
-    S.returnToPeer = S.peer;
-    chips();
-    showTab('events');
+/** Paging and the reply-linking toggle, for one diagram instance. */
+function wireSequence(view) {
+  const page = (by) => {
+    const state = view.state();
+    state.offset = Math.max(0, state.offset + by * seqLimit(view));
+    drawSequence(view);
+  };
+  $(view.prev).addEventListener('click', () => page(-1));
+  $(view.next).addEventListener('click', () => page(1));
+  $(view.limit).addEventListener('change', () => {
+    view.state().offset = 0;
+    drawSequence(view);
   });
-  $('pseq-prev').addEventListener('click', () => {
-    S.peerSeq.offset = Math.max(0, S.peerSeq.offset - seqLimit(SEQ_PEER));
-    drawSequence(SEQ_PEER);
-  });
-  $('pseq-next').addEventListener('click', () => {
-    S.peerSeq.offset += seqLimit(SEQ_PEER);
-    drawSequence(SEQ_PEER);
-  });
-  $('pseq-limit').addEventListener('change', () => {
-    S.peerSeq.offset = 0;
-    drawSequence(SEQ_PEER);
-  });
-  $('pseq-ties').addEventListener('change', () => drawSequence(SEQ_PEER));
+  $(view.ties).addEventListener('change', () => drawSequence(view));
+}
 
-  // Back and forward are the browser's, so they must not push history again.
-  window.addEventListener('popstate', (event) => {
-    showRoute(event.state ?? routeOf(location.hash));
-  });
-
-  $("rsearch").addEventListener("input", paintRelay);
-
-
-  for (const [id, group, redraw] of [["asort-first", "asort", drawActivity],
-                                     ["asort-events", "asort", drawActivity],
-                                     ["aw-count", "aw", drawActivity],
-                                     ["aw-bytes", "aw", drawActivity],
-                                     ["ad-all", "ad", renderDurations],
-                                     ["ad-closed", "ad", renderDurations],
-                                     ["ad-evicted", "ad", renderDurations]]) {
-    $(id).addEventListener("click", () => {
-      for (const b of document.querySelectorAll(`[id^="${group}-"]`)) {
-        b.classList.toggle("on", b.id === id);
-      }
-      redraw();
-    });
+function wireActivity() {
+  // Each segmented control lights the button that was clicked and redraws the
+  // chart it belongs to. The group prefix is what ties the buttons together.
+  for (const [group, redraw] of [['asort', drawActivity], ['aw', drawActivity],
+                                 ['ad', renderDurations]]) {
+    for (const b of document.querySelectorAll(`[id^="${group}-"]`)) {
+      b.addEventListener('click', () => {
+        for (const other of document.querySelectorAll(`[id^="${group}-"]`)) {
+          other.classList.toggle('on', other === b);
+        }
+        redraw();
+      });
+    }
   }
-  for (const id of ["arows", "amin"]) $(id).addEventListener("change", drawActivity);
-  $("act").addEventListener("mousemove", showActivityTip);
-  $("act").addEventListener("mouseleave", () => { $("atip").hidden = true; });
-  $("act").addEventListener("click", (event) => {
+  for (const id of ['arows', 'amin']) $(id).addEventListener('change', drawActivity);
+  $('act').addEventListener('mousemove', showActivityTip);
+  $('act').addEventListener('mouseleave', () => { $('atip').hidden = true; });
+  $('act').addEventListener('click', (event) => {
     const hit = activityAt(event);
     if (hit) openPeer(hit.peer.peerId);
   });
-
-
-  chartInteraction('tl', 'tip', true);
-  chartInteraction("tl2", "tip2", false);
-  chartInteraction("ptl", "ptip", false);
-
-  let resizing;
-  window.addEventListener('resize', () => {
-    clearTimeout(resizing);
-    resizing = setTimeout(() => {
-      if (S.session && !S.dead && S.tab === 'overview') drawBoth();
-      if (S.session && !S.dead && S.tab === "events") refreshEvents();
-      if (S.session && !S.dead && S.tab === "activity") drawActivity();
-      if (S.session && !S.dead && S.tab === "peer") drawPeerTimeline(S.peer);
-    }, 120);
-  });
 }
+
 
 (async function main() {
   setup();

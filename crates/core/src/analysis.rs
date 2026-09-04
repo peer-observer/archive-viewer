@@ -6,7 +6,7 @@
 use crate::decode::{Completion, Compression, DecodeError, RecordDecoder, RecordSink};
 use crate::exchange::{self, Tracker};
 use crate::histogram::Histogram;
-use crate::kind::{classify, Group, KindTable};
+use crate::kind::{classify, KindTable};
 use crate::latency::Latencies;
 use crate::peers::{PeerTable, UserAgentSource};
 use crate::proto::{
@@ -490,9 +490,4 @@ fn connection_peer_id(
         // Carries a bare peer id rather than a Connection.
         C::Misbehaving(m) => m.id,
     })
-}
-
-/// Group of a kind id, for callers that only have the id.
-pub fn group_of(kinds: &KindTable, kind: u16) -> Option<Group> {
-    kinds.get(kind).map(|k| k.group)
 }
