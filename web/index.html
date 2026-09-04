@@ -2790,7 +2790,11 @@ const SEQ = {
   // all it has held since the exchange brackets moved onto the lifelines. Both
   // are twelve monospaced characters wide, so it needs a hundred pixels, not the
   // hundred and seventy it took when the brackets stacked up in it.
-  row: 24, head: 46, gutter: 100, minLane: 190, pad: 12,
+  //
+  // `lead` is the strip above the first row. A label sits fifteen pixels above
+  // its own arrow, and the first arrow is only half a row down, so without it
+  // the top of the first label is off the canvas.
+  row: 24, head: 46, gutter: 100, minLane: 190, pad: 12, lead: 8,
 
   // Rows are spaced by how long the node waited between messages. A fixed pitch
   // draws a two-second silence exactly like two messages in the same
@@ -2980,7 +2984,9 @@ function drawSequence() {
   // One line, not a banner: colour means direction here, and the caveat about
   // how replies are paired is the same caveat on every draw.
   const caption = el('div', 'legend');
-  caption.style.cssText = 'padding:0 0 6px';
+  // Padding from `.legend`, which lines the swatches up with everything else in
+  // the panel; only the bottom is this one's own.
+  caption.style.paddingBottom = '6px';
   caption.append(swatched('span', 'it static', color(0), 'inbound'),
     swatched('span', 'it static', color(1), 'outbound'));
   if (ctx.blocks.length) {
@@ -3015,7 +3021,7 @@ function seqLayout(page) {
   // Where each row sits, and how much empty band precedes it.
   const tops = [];
   const gaps = [];
-  let y = 0;
+  let y = SEQ.lead;
   let previous = null;
   for (const r of page.rows) {
     const gap = previous === null ? 0 : Math.max(0, r.timestamp - previous);
