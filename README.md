@@ -59,17 +59,31 @@ one you click.
 ### The sequence diagram
 
 On a peer's own page: two lifelines, this node and that peer, arrows for messages
-with direction and size, connection lifecycle events as notes, and the gap since
-the previous message in the gutter. A handshake reads directly off it:
+with direction and size, and connection lifecycle events as notes. A handshake
+reads directly off it:
 
 ```
-06:18:39.503            <- version (123 B)
-06:18:39.504      +1ms  -> version (102 B)
-06:18:39.506      +2ms  -> wtxidrelay
-06:18:39.506      +0ms  -> sendaddrv2
-06:18:39.506      +0ms  -> verack
-06:18:39.625    +119ms  <- verack
+06:18:39.503   <- version (123 B)
+                      1 ms
+06:18:39.504   -> version (102 B)
+                      2 ms
+06:18:39.506   -> wtxidrelay
+06:18:39.506   -> sendaddrv2
+06:18:39.506   -> verack
+                    119 ms
+06:18:39.625   <- verack
 ```
+
+Rows are spaced by how long the node waited, and the wait is written in the band
+it created. A fixed pitch draws a two-second silence exactly like two messages in
+the same millisecond, which is the one thing a sequence diagram is for. The scale
+is logarithmic, since the gaps run from microseconds to minutes; it has a floor,
+so any gap at all leaves room for the figure that labels it; and a ceiling, so a
+peer that went quiet for an hour does not push the next message off the page.
+Messages inside the same millisecond stay packed together, which is itself the
+right picture. On the sample archive that makes a hundred rows about a quarter
+taller, with roughly half the gaps carrying a figure.
+
 
 The actors stay put while the messages scroll under them: the diagram is two
 SVGs stacked in one scroller, a sticky one holding the column headings and the
