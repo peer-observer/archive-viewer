@@ -234,7 +234,12 @@ canvas { display: block; width: 100%; }
 
 /* ------------------------------------------------------- sequence diagram */
 .seqsvg { display: block; font-family: var(--mono); }
-#pseq-scroll { overflow: auto; max-height: 70vh; }
+/* As tall as the window has room for, rather than a fixed slice of it: the
+   panel sits high on the page, so what is above the diagram is the two sticky
+   strips of chrome, the panel's own head and the caption -- about 150px, and
+   the rest is the diagram's. */
+#pseq-scroll { overflow: auto; max-height: calc(100vh - 150px); }
+
 /* The actors stay put while the messages scroll under them. An SVG is a sticky
    box like any other element, and the two share a width, so scrolling sideways
    keeps the lanes lined up without anything having to sync them. */
@@ -412,24 +417,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <div class="legend" id="ptl-legend"></div>
       </div>
 
-      <div class="cols c2 mb">
-        <div class="p">
-          <div class="h"><span>Messages by command</span></div>
-          <div class="scroll" style="max-height:40vh"><table id="pcmd"></table></div>
-        </div>
-        <div>
-          <div class="p mb">
-            <div class="h"><span id="plife-head">Connection lifecycle</span></div>
-            <div class="scroll" style="max-height:22vh"><table id="plife"></table></div>
-          </div>
-          <div class="p">
-            <div class="h"><span>Transaction relay</span></div>
-            <div class="body" id="prelay"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="p">
+      <div class="p mb">
         <div class="h">
           <span>Message sequence</span>
           <span class="sp"></span>
@@ -457,6 +445,23 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <div class="p" id="pseq-insp">
             <div class="h"><span>Message</span></div>
             <div class="body dim">Select a message in the diagram to decode it.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cols c2">
+        <div class="p">
+          <div class="h"><span>Messages by command</span></div>
+          <div class="scroll" style="max-height:40vh"><table id="pcmd"></table></div>
+        </div>
+        <div>
+          <div class="p mb">
+            <div class="h"><span id="plife-head">Connection lifecycle</span></div>
+            <div class="scroll" style="max-height:22vh"><table id="plife"></table></div>
+          </div>
+          <div class="p">
+            <div class="h"><span>Transaction relay</span></div>
+            <div class="body" id="prelay"></div>
           </div>
         </div>
       </div>
@@ -2428,7 +2433,12 @@ function renderExchangeLatency() {
  * it. `head` is the height of the first; the second starts at zero.
  */
 const SEQ = {
-  row: 24, head: 46, gutter: 168, minLane: 190, pad: 12,
+  // The gutter holds a time of day per row and the date above them, and that is
+  // all it has held since the exchange brackets moved onto the lifelines. Both
+  // are twelve monospaced characters wide, so it needs a hundred pixels, not the
+  // hundred and seventy it took when the brackets stacked up in it.
+  row: 24, head: 46, gutter: 100, minLane: 190, pad: 12,
+
   // Rows are spaced by how long the node waited between messages. A fixed pitch
   // draws a two-second silence exactly like two messages in the same
   // millisecond, which is the one thing a sequence diagram is for.
@@ -2629,13 +2639,13 @@ function seqLayout(page) {
 function seqHeaders(head, ctx) {
   const { page, laneX, lane, colour } = ctx;
 
-  // The date lives here, once, so each row needs only a time of day.
+  // The date lives here, once, so each row needs only a time of day. It stacks
+  // rather than running across, because the gutter is only as wide as a
+  // timestamp and a date range would need half again as much.
   const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
-  head.append(
-    svgText({ class: 'headsub', x: 10, y: 22 },
-      days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0]),
-    svgText({ class: 'headsub', x: 10, y: 34 }, 'UTC'),
-  );
+  const stamp = days.length > 1 ? [days[0], `→ ${days.at(-1)}`, 'UTC'] : [days[0], 'UTC'];
+  stamp.forEach((line, i) => head.append(
+    svgText({ class: 'headsub', x: 10, y: 15 + i * 11 }, line)));
 
   const peer = S.peerRows.find((p) => p.peerId === S.seq.peer);
   const actors = [

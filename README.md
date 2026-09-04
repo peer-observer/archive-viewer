@@ -97,9 +97,13 @@ The actors stay put while the messages scroll under them: the diagram is two
 SVGs stacked in one scroller, a sticky one holding the column headings and the
 actor boxes, and a tall one holding the messages. They share a width, so
 scrolling sideways keeps the lanes lined up without anything having to
-synchronise them. The lanes are sized from the panel rather than fixed, so with
-only two of them the diagram fills the space it has -- 360 px lanes in a 900 px
-panel where it used to draw 250 and leave the rest empty.
+synchronise them. The panel sits second on the page, under the traffic chart and
+above the tables, and the scroller takes whatever height the window has left
+rather than a fixed slice of it -- so on a 1080 px screen the diagram gets 930 px
+instead of 756. The lanes are sized from the panel too: with only two of them and
+nothing left in the margin but a timestamp, the diagram fills the space it has --
+394 px lanes in a 900 px panel where it used to draw 250 and leave the rest empty.
+
 
 This is peer-observer issue #397, done in the browser rather than by exporting to
 an external diagram tool.
@@ -138,8 +142,9 @@ a page boundary is not drawn. The toggle in the toolbar turns them off.
 **Peer** — a page for one peer, reached by clicking it anywhere it appears. Its
 own timeline, scoped to that peer's connection rather than to the archive, so a
 peer connected for five minutes of a three-hour capture is a readable chart
-instead of a sliver; its message mix by command; its connection lifecycle; its
-relay record; and its message sequence diagram.
+instead of a sliver; then its message sequence diagram, which is what the page
+is for and gets the room to say so; then its message mix by command, its
+connection lifecycle and its relay record.
 
 Navigation is the browser's own history: opening a peer pushes an entry, and
 Back returns to the list. Routes live only as long as the session does — the
