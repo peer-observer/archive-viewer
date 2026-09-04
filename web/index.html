@@ -239,8 +239,8 @@ canvas { display: block; width: 100%; }
 .seqsvg .arrow { stroke-width: 1.5; fill: none; }
 .seqsvg .label { font-size: 11px; fill: var(--ink-2); }
 .seqsvg .elapsed { fill: var(--ink-3); }
-/* Knocks a crossed lifeline out from under a label: an arrow to a distant
-   lane runs straight through the lifelines in between. */
+/* Keeps a label that is wider than the gap between the lifelines from
+   sitting on top of one. */
 .seqsvg .plate { fill: var(--panel); }
 .seqsvg .tie { fill: none; stroke-width: 1.25; stroke-opacity: 0.4; pointer-events: none; }
 .seqsvg .tie.on { stroke-opacity: 1; stroke-width: 2; }
@@ -251,12 +251,6 @@ canvas { display: block; width: 100%; }
 .seqsvg .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
 .seqsvg .note { fill: var(--panel-2); stroke: var(--rule-2); stroke-opacity: 0.6; }
 .seqsvg .notetext { fill: var(--ink-2); font-size: 10px; }
-/* Removing a lifeline happens on the lifeline's own header: a bare ×, with an
-   invisible rect behind it only to give the click a comfortable target. */
-.seqsvg .rm { cursor: pointer; }
-.seqsvg .rmhit { fill: none; stroke: none; pointer-events: all; }
-.seqsvg .rmx { fill: var(--ink-3); stroke: none; font-size: 15px; font-family: var(--sans); }
-.seqsvg .rm:hover .rmx { fill: var(--bad); }
 
 /* -------------------------------------------------------------- start/load */
 #start { max-width: 620px; margin: 8vh auto; text-align: center; }
@@ -292,7 +286,6 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
   <button data-tab="overview" aria-selected="true">Overview</button>
   <button data-tab="peers" aria-selected="false">Peers</button>
   <button data-tab="activity" aria-selected="false">Activity</button>
-  <button data-tab="sequence" aria-selected="false">Sequence</button>
   <button data-tab="relay" aria-selected="false">Relay</button>
   <button data-tab="events" aria-selected="false">Events</button>
 
@@ -560,36 +553,6 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         </div>
       </div>
     </div>
-
-    <!-- ------------------------------------------------------- sequence -->
-    <div id="tab-sequence" hidden>
-      <div class="toolbar">
-        <select id="seq-add"><option value="">add peer&hellip;</option></select>
-        <span class="grow"></span>
-        <button class="b" id="seq-prev">&larr; earlier</button>
-        <span class="dim mono" id="seq-pos"></span>
-        <button class="b" id="seq-next">later &rarr;</button>
-        <select id="seq-limit" title="Messages per screen">
-          <option value="100">100</option>
-          <option value="200" selected>200</option>
-          <option value="500">500</option>
-        </select>
-        <label class="dim check"
-               title="Link each request to the reply it most likely caused. The archive records no txids, block hashes or ping nonces, so a reply that also arrives unsolicited — inv, headers, addr, cmpctblock — can be tied to the wrong request. Exchanges spanning a page boundary are not shown.">
-          <input type="checkbox" id="seq-ties" checked> link replies
-        </label>
-      </div>
-      <div id="seq-note"></div>
-      <div class="side">
-        <div class="p" style="overflow:hidden">
-          <div id="seq-scroll" style="overflow:auto"><svg id="seq" class="seqsvg"></svg></div>
-        </div>
-        <div class="p" id="seq-insp">
-          <div class="h"><span>Message</span></div>
-          <div class="body dim">Select a message in the diagram to decode it.</div>
-        </div>
-      </div>
-    </div>
   </section>
 </main>
 
@@ -675,8 +638,7 @@ const S = {
   peerSort: { key: 'events', desc: true }, peerRows: [],
   peerMode: 'peers',                // 'peers' or 'networks'
   netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
-  seq: { peers: [], offset: 0, selected: null, rows: [] },
-  peerSeq: { peers: [], offset: 0, selected: null, rows: [] },
+  seq: { peer: null, offset: 0, selected: null, rows: [] },
   relayRows: [], relaySort: { key: "first", desc: true },
   exchangeRows: [], exchangeSel: null,
   activity: null,
@@ -747,8 +709,7 @@ async function loadFiles(list) {
   S.event = S.peer = null;
   S.hidden.tl.clear(); S.hidden.tl2.clear();
   S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
-  S.seq = { peers: [], offset: 0, selected: null, rows: [] };
-  S.peerSeq = { peers: [], offset: 0, selected: null, rows: [] };
+  S.seq = { peer: null, offset: 0, selected: null, rows: [] };
   S.relayRows = []; S.relaySort = { key: "first", desc: true };
   S.exchangeRows = []; S.exchangeSel = null;
   S.activity = null;
@@ -1354,12 +1315,13 @@ function renderPeerPage(peerId) {
 
   // The diagram opens on this peer and stays on it: this page is about one
   // conversation, and the Sequence tab is where several are compared.
-  if (S.peerSeq.peers[0] !== peerId) {
-    S.peerSeq = { peers: [peerId], offset: 0, selected: null, rows: [] };
-    $('pseq-insp').replaceChildren(sub('Message'),
-      el('div', 'body dim', 'Select a message in the diagram to decode it.'));
+  // Arriving at a different peer starts its diagram from the beginning.
+  if (S.seq.peer !== peerId) {
+    S.seq = { peer: peerId, offset: 0, selected: null, rows: [] };
+    $("pseq-insp").replaceChildren(sub("Message"),
+      el("div", "body dim", "Select a message in the diagram to decode it."));
   }
-  drawSequence(SEQ_PEER);
+  drawSequence();
 }
 
 /**
@@ -2406,25 +2368,12 @@ function renderExchangeLatency() {
 /* ------------------------------------------------------- sequence diagram */
 
 /**
- * The diagram is drawn in two places -- its own tab, where several peers can be
- * compared, and a single peer's page -- so everything it touches comes from an
- * instance rather than from fixed ids. `state` holds which peers are on it,
- * where in the archive it is paged to, and which row is selected.
+ * The message sequence diagram, on a peer's own page.
+ *
+ * Two lifelines only: this node and the peer whose page it is. That is the whole
+ * shape of it, so nothing here carries a lane index around -- the peer is always
+ * lane one, and there is nothing to add, remove or pick between.
  */
-const SEQ_TAB = {
-  svg: 'seq', scroll: 'seq-scroll', note: 'seq-note', pos: 'seq-pos',
-  prev: 'seq-prev', next: 'seq-next', limit: 'seq-limit', ties: 'seq-ties',
-  insp: "seq-insp", state: () => S.seq,
-  // Only the tab has a picker to add lifelines back, so only the tab lets you
-  // take one away.
-  removable: true,
-};
-const SEQ_PEER = {
-  svg: 'pseq', scroll: 'pseq-scroll', note: 'pseq-note', pos: 'pseq-pos',
-  prev: 'pseq-prev', next: 'pseq-next', limit: 'pseq-limit', ties: 'pseq-ties',
-  insp: "pseq-insp", state: () => S.peerSeq, maxHeight: "56vh",
-};
-
 const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24, tie: 9, tieDepth: 6 };
 
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -2441,43 +2390,7 @@ function svgText(attrs, text) {
   return n;
 }
 
-function seqLimit(view) {
-  return Number($(view.limit).value);
-}
-
-/**
- * Rebuild the peer picker from the peers actually in the archive, busiest first.
- * A sequence diagram is only legible for a handful of lifelines, so peers are
- * added explicitly rather than all at once. Only the tab has a picker; a peer's
- * own page is fixed to that peer.
- */
-function buildSeqPicker() {
-  const select = $('seq-add');
-  select.replaceChildren(new Option('add peer…', ''));
-  const rows = S.peerRows.length ? S.peerRows : (callJson('peers', 'events', true, 0, 200)?.rows ?? []);
-  const busiest = [...rows].sort((a, b) => b.events - a.events).slice(0, 200);
-  for (const p of busiest) {
-    select.append(new Option(`${p.peerId}  ${p.addr ?? ""}  (${num(p.events)})`, String(p.peerId)));
-  }
-  // Start on the busiest peer so the tab is never empty on arrival.
-  if (!S.seq.peers.length && busiest.length) S.seq.peers = [busiest[0].peerId];
-}
-
-function seqAddPeer(peerId) {
-  if (S.seq.peers.includes(peerId)) return;
-  // Beyond a handful of lifelines the diagram stops being readable.
-  if (S.seq.peers.length >= 6) S.seq.peers.shift();
-  S.seq.peers.push(peerId);
-  S.seq.offset = 0;
-  drawSequence(SEQ_TAB);
-}
-
-function seqRemovePeer(view, peerId) {
-  const state = view.state();
-  state.peers = state.peers.filter((p) => p !== peerId);
-  state.offset = 0;
-  drawSequence(view);
-}
+const seqLimit = () => Number($("pseq-limit").value);
 
 
 /**
@@ -2512,50 +2425,43 @@ function exchangeBrackets(ties) {
   return brackets;
 }
 
-function drawSequence(view) {
+function drawSequence() {
   if (!S.session || S.dead) return;
-  const state = view.state();
-  const node = $(view.svg);
-  const note = $(view.note);
+  const node = $('pseq');
+  const note = $('pseq-note');
   node.replaceChildren();
   note.replaceChildren();
+  if (S.seq.peer == null) return;
 
-  if (!state.peers.length) {
-    $(view.pos).textContent = '';
-    note.append(el('div', 'msg info', 'Add a peer to draw its message exchange.'));
-    return;
-  }
-
-  // Messages and connection events for the chosen peers, in archive order,
-  // honouring the time range brushed on the overview.
+  // This peer's messages and connection events, in archive order, honouring the
+  // time range brushed on the overview.
   const page = callJson('sequence', JSON.stringify({
     groups: ['message', 'connection'],
     kinds: [],
-    peerIds: state.peers,
+    peerIds: [S.seq.peer],
     timeFrom: S.filter.timeFrom,
     timeTo: S.filter.timeTo,
     text: '',
-  }), state.offset, seqLimit(view));
+  }), S.seq.offset, seqLimit());
   if (!page) return;
-  state.rows = page.rows;
+  S.seq.rows = page.rows;
 
-  const first = page.total ? state.offset + 1 : 0;
-  $(view.pos).textContent =
-    `${num(first)}–${num(state.offset + page.rows.length)} of ${num(page.total)}`;
-  $(view.prev).disabled = state.offset === 0;
-  $(view.next).disabled = state.offset + seqLimit(view) >= page.total;
+  const first = page.total ? S.seq.offset + 1 : 0;
+  $('pseq-pos').textContent =
+    `${num(first)}–${num(S.seq.offset + page.rows.length)} of ${num(page.total)}`;
+  $('pseq-prev').disabled = S.seq.offset === 0;
+  $('pseq-next').disabled = S.seq.offset + seqLimit() >= page.total;
 
   if (!page.rows.length) {
-    note.append(el('div', 'msg info', 'No messages for these peers in the selected range.'));
+    note.append(el('div', 'msg info', 'No messages for this peer in the selected range.'));
     node.setAttribute('height', 0);
     return;
   }
 
-  const ctx = seqLayout(view, page, state);
+  const ctx = seqLayout(page);
   node.setAttribute('width', ctx.width);
   node.setAttribute('height', ctx.height);
   node.setAttribute('viewBox', `0 0 ${ctx.width} ${ctx.height}`);
-  $(view.scroll).style.maxHeight = view.maxHeight ?? 'calc(100vh - 190px)';
 
   seqHeaders(node, ctx);
   const rowEls = seqRows(node, ctx);
@@ -2576,37 +2482,36 @@ function drawSequence(view) {
  * Everything the three drawing steps below need: the page, the geometry, and
  * the exchange brackets that decide how wide the left gutter has to be.
  */
-function seqLayout(view, page, state) {
+function seqLayout(page) {
   // Exchanges are matched within the page, so a request answered on the next
   // screenful simply has no bracket. Turning them off is worth having: on a
   // busy peer nearly every row takes part in one.
-  const ties = $(view.ties).checked ? (page.ties ?? []) : [];
+  const ties = $('pseq-ties').checked ? (page.ties ?? []) : [];
   const brackets = exchangeBrackets(ties);
   const tieWidth = brackets.length
     ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
     : 0;
   const gutter = SEQ.gutter + tieWidth;
-  const lanes = state.peers;
   const laneX = (i) => gutter + SEQ.lane * i + SEQ.lane / 2;
 
   return {
-    view, page, state, ties, brackets, tieWidth, gutter, lanes, laneX,
-    width: gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad,
+    page, ties, brackets, tieWidth, gutter, laneX,
+    width: gutter + SEQ.lane * 2 + SEQ.pad,
     height: SEQ.top + page.rows.length * SEQ.row + SEQ.pad,
     rowY: (i) => SEQ.top + i * SEQ.row + SEQ.row / 2,
     nodeX: laneX(0),
-    peerX: (peerId) => laneX(lanes.indexOf(peerId) + 1),
-    // Fixed categorical slot per lane, never cycled: at most six lifelines are
-    // allowed and the palette has eight hues.
-    peerColour: (peerId) => color(Math.max(0, lanes.indexOf(peerId))),
+    peerX: laneX(1),
+    // One peer, so the colour is not distinguishing it from another; it ties
+    // the diagram to the rest of the page's palette.
+    colour: color(0),
     // How long each reply took, for the label on the reply's arrow.
     elapsedOf: new Map(ties.map((t) => [t.reply, t.elapsedMs])),
   };
 }
 
-/** Column headers in the gutter, and a lifeline per actor. */
+/** Column headers in the gutter, and a lifeline for each of the two actors. */
 function seqHeaders(node, ctx) {
-  const { page, lanes, laneX, tieWidth, gutter, height, view } = ctx;
+  const { page, laneX, tieWidth, gutter, height, colour } = ctx;
 
   // The date lives here, once, so each row needs only a time of day — a full
   // timestamp on every row is wide enough to run into the delta column beside
@@ -2619,29 +2524,25 @@ function seqHeaders(node, ctx) {
     svgText({ class: 'headsub', x: gutter - 14, y: 34, 'text-anchor': 'end' }, 'since prev'),
   );
 
-  const heads = [{ title: 'this node', sub: '' }].concat(
-    lanes.map((id) => ({
-      title: `peer ${id}`,
-      sub: S.peerRows.find((p) => p.peerId === id)?.addr ?? '',
-    })),
-  );
+  const peer = S.peerRows.find((p) => p.peerId === S.seq.peer);
+  const heads = [
+    { title: 'this node', sub: '', colour: null },
+    { title: `peer ${S.seq.peer}`, sub: peer?.addr ?? '', colour },
+  ];
   heads.forEach((head, i) => {
     const x = laneX(i);
-    // This node is the fixed reference and stays neutral; each peer takes the
-    // next categorical slot, so its lifeline, header and arrows all agree.
-    const colour = i === 0 ? null : color(i - 1);
     const life = svg('line', {
       class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad,
     });
     // Inline style, not a presentation attribute: `.seqsvg .life` and `.head`
     // already set `stroke`, and any CSS rule beats a presentation attribute.
-    if (colour) {
-      life.style.stroke = colour;
+    if (head.colour) {
+      life.style.stroke = head.colour;
       life.style.strokeOpacity = '0.5';
     }
     const w = SEQ.lane - 26;
     const box = svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 });
-    if (colour) box.style.stroke = colour;
+    if (head.colour) box.style.stroke = head.colour;
     node.append(life, box);
     // Centre the title in the box when there is no subtitle under it.
     node.append(svgText(
@@ -2650,34 +2551,12 @@ function seqHeaders(node, ctx) {
       node.append(svgText({ class: 'headsub', x, y: 34, 'text-anchor': 'middle' },
         head.sub.length > 26 ? `${head.sub.slice(0, 25)}…` : head.sub));
     }
-    // Removing a lifeline happens on its own header rather than from a list of
-    // chips above the diagram. Lane 0 is this node, which cannot be removed,
-    // and a view with no picker cannot put one back.
-    if (i > 0 && view.removable) {
-      node.append(seqRemoveControl(x + w / 2 - 11, 22, view, lanes[i - 1]));
-    }
   });
-}
-
-function seqRemoveControl(cx, cy, view, peerId) {
-  const rm = svg('g', { class: 'rm' });
-  const tip = svg('title');
-  tip.textContent = `Remove peer ${peerId} from the diagram`;
-  rm.append(
-    svg('rect', { class: 'rmhit', x: cx - 9, y: cy - 9, width: 18, height: 18 }),
-    svgText({ class: 'rmx', x: cx, y: cy + 4, 'text-anchor': 'middle' }, '×'),
-    tip,
-  );
-  rm.addEventListener('click', (event) => {
-    event.stopPropagation();
-    seqRemovePeer(view, peerId);
-  });
-  return rm;
 }
 
 /** One row per message, returned so the brackets can light them up. */
 function seqRows(node, ctx) {
-  const { page, state, view, tieWidth, gutter, width, rowY, nodeX, peerX, peerColour } = ctx;
+  const { page, tieWidth, gutter, width, rowY, peerX, colour } = ctx;
 
   // Label plates go in their own layer, under every row: they knock the
   // lifelines out from under a label, but must stay below the row hover fill,
@@ -2689,7 +2568,7 @@ function seqRows(node, ctx) {
   let previous = null;
   page.rows.forEach((r, i) => {
     const y = rowY(i);
-    const g = svg('g', { class: `row${state.selected === r.index ? ' on' : ''}` });
+    const g = svg('g', { class: `row${S.seq.selected === r.index ? ' on' : ''}` });
     rowEls[i] = g;
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
 
@@ -2703,56 +2582,52 @@ function seqRows(node, ctx) {
     }
     previous = r.timestamp;
 
-    const colour = peerColour(r.peerId);
     if (r.group === 'connection') {
       // Lifecycle events are not an exchange, so they are a note on the peer's
       // own lifeline rather than an arrow.
-      const px = peerX(r.peerId);
       const w = 132;
-      const box = svg('rect', { class: 'note', x: px - w / 2, y: y - 8, width: w, height: 16, rx: 2 });
+      const box = svg('rect', {
+        class: 'note', x: peerX - w / 2, y: y - 8, width: w, height: 16, rx: 2,
+      });
       box.style.stroke = colour;
-      g.append(box, svgText({ class: 'notetext', x: px, y: y + 3.5, 'text-anchor': 'middle' },
+      g.append(box, svgText({ class: 'notetext', x: peerX, y: y + 3.5, 'text-anchor': 'middle' },
         r.kind ?? ''));
     } else {
-      seqArrow(g, plates, ctx, r, i, y, colour);
+      seqArrow(g, plates, ctx, r, i, y);
     }
 
     g.addEventListener('click', () => {
-      state.selected = r.index;
-      drawSequence(view);
-      inspectInto(view.insp, r.index, `Message ${r.index}`);
+      S.seq.selected = r.index;
+      drawSequence();
+      inspectInto('pseq-insp', r.index, `Message ${r.index}`);
     });
     node.append(g);
   });
   return rowEls;
 }
 
-/** One message as an arrow between two lifelines, with its label. */
-function seqArrow(g, plates, ctx, r, i, y, colour) {
+/** One message as an arrow between the two lifelines, with its label. */
+function seqArrow(g, plates, ctx, r, i, y) {
   const inbound = r.inbound === true;
-  const px = ctx.peerX(r.peerId);
-  const from = inbound ? px : ctx.nodeX;
-  const to = inbound ? ctx.nodeX : px;
+  const from = inbound ? ctx.peerX : ctx.nodeX;
+  const to = inbound ? ctx.nodeX : ctx.peerX;
   const dir = Math.sign(to - from) || 1;
   const end = to - dir * 5;
   g.append(
-    svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: colour }),
+    svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: ctx.colour }),
     svg('path', {
       d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
-      fill: colour,
+      fill: ctx.colour,
     }),
   );
 
-  // The label stays in a text token rather than the peer's colour: three of the
-  // palette's hues sit below 3:1 on the light surface and are unreadable at
-  // 11px. The arrow carries the identity; the label carries the words.
   const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
   const elapsed = ctx.elapsedOf.has(i) ? ` ↩ ${dur(ctx.elapsedOf.get(i))}` : '';
   const cx = (from + to) / 2;
-  // An arrow to a distant lane crosses the lifelines in between, and a label
-  // straddling one is unreadable without a plate under it. The width comes from
-  // the character count rather than `getBBox`, which reports nothing while the
-  // tab is hidden; the diagram is monospaced, so counting is accurate.
+  // A label wider than the gap between the lifelines would sit on top of one,
+  // so it gets an opaque plate under it. The width comes from the character
+  // count rather than `getBBox`, which reports nothing while the tab is hidden;
+  // the diagram is monospaced, so counting is accurate.
   const plateWidth = (main + elapsed).length * 6.7 + 8;
   plates.append(svg('rect', {
     class: 'plate', x: cx - plateWidth / 2, y: y - 15, width: plateWidth, height: 13, rx: 2,
@@ -2767,12 +2642,13 @@ function seqArrow(g, plates, ctx, r, i, y, colour) {
   g.append(label);
 }
 
+
 /**
  * Exchange brackets, drawn last so a hovered row's highlight does not cover
  * them. They take no pointer events of their own: the rows drive the focus.
  */
 function seqBrackets(node, ctx, rowEls) {
-  const { page, brackets, rowY, peerColour } = ctx;
+  const { page, brackets, rowY, colour } = ctx;
   const bracketAt = new Map();
   for (const bracket of brackets) {
     const x = 8 + bracket.depth * SEQ.tie;
@@ -2781,7 +2657,7 @@ function seqBrackets(node, ctx, rowEls) {
     const spine = `M ${x + 5} ${rowY(bracket.request)} H ${x} V ${rowY(bracket.last)}`;
     const ticks = bracket.replies.map((tie) => ` M ${x} ${rowY(tie.reply)} H ${x + 5}`).join('');
     const path = svg('path', { class: 'tie', d: spine + ticks });
-    path.style.stroke = peerColour(page.rows[bracket.request].peerId);
+    path.style.stroke = colour;
 
     const request = page.rows[bracket.request].kind;
     const answers = bracket.replies.map((tie) => page.rows[tie.reply].kind);
@@ -2818,7 +2694,7 @@ function seqBrackets(node, ctx, rowEls) {
 /* ---------------------------------------------------------------- routing */
 
 // Display order, with the peer page tucked in beside the list it belongs to.
-const TABS = ["overview", "peers", "peer", "activity", "sequence", "relay", "events"];
+const TABS = ["overview", "peers", "peer", "activity", "relay", "events"];
 
 /**
  * Navigation goes through the browser's own history, so Back does what Back
@@ -2871,7 +2747,6 @@ const DRAW = {
   peers: () => { if (S.peerMode === 'peers') paintPeers(); },
   peer: (route) => renderPeerPage(route.peerId),
   events: refreshEvents,
-  sequence: () => { buildSeqPicker(); drawSequence(SEQ_TAB); },
   relay: renderRelay,
   activity: () => { renderDurations(); drawActivity(); },
 };
@@ -2895,8 +2770,7 @@ function setup() {
   wireFileLoading();
   wireNavigation();
   wireFilters();
-  wireSequence(SEQ_TAB);
-  wireSequence(SEQ_PEER);
+  wireSequence();
   wireActivity();
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);
@@ -3001,27 +2875,20 @@ function wireFilters() {
     else paintNetworks();
   });
   $('rsearch').addEventListener('input', paintRelay);
-  $('seq-add').addEventListener('change', (e) => {
-    if (e.target.value) seqAddPeer(Number(e.target.value));
-    e.target.value = '';
-  });
 }
 
-/** Paging and the reply-linking toggle, for one diagram instance. */
-function wireSequence(view) {
+/** Paging and the reply-linking toggle for the sequence diagram. */
+function wireSequence() {
   const page = (by) => {
-    const state = view.state();
-    state.offset = Math.max(0, state.offset + by * seqLimit(view));
-    drawSequence(view);
+    S.seq.offset = Math.max(0, S.seq.offset + by * seqLimit());
+    drawSequence();
   };
-  $(view.prev).addEventListener('click', () => page(-1));
-  $(view.next).addEventListener('click', () => page(1));
-  $(view.limit).addEventListener('change', () => {
-    view.state().offset = 0;
-    drawSequence(view);
-  });
-  $(view.ties).addEventListener('change', () => drawSequence(view));
+  $('pseq-prev').addEventListener('click', () => page(-1));
+  $('pseq-next').addEventListener('click', () => page(1));
+  $('pseq-limit').addEventListener('change', () => { S.seq.offset = 0; drawSequence(); });
+  $('pseq-ties').addEventListener('change', drawSequence);
 }
+
 
 function wireActivity() {
   // Each segmented control lights the button that was clicked and redraws the

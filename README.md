@@ -56,10 +56,11 @@ prefix would have split that one actor across four buckets.
 **Events** — every retained event, filterable, with a full protobuf decode of any
 one you click.
 
-**Sequence** — a sequence diagram of the P2P exchange for up to six peers: one
-lifeline per peer, arrows for messages with direction and size, connection
-lifecycle events as notes, and the gap since the previous message in the gutter.
-A handshake reads directly off it:
+### The sequence diagram
+
+On a peer's own page: two lifelines, this node and that peer, arrows for messages
+with direction and size, connection lifecycle events as notes, and the gap since
+the previous message in the gutter. A handshake reads directly off it:
 
 ```
 06:18:39.503            <- version (123 B)
@@ -94,8 +95,7 @@ a page boundary is not drawn. The toggle in the toolbar turns them off.
 own timeline, scoped to that peer's connection rather than to the archive, so a
 peer connected for five minutes of a three-hour capture is a readable chart
 instead of a sliver; its message mix by command; its connection lifecycle; its
-relay record; and its message sequence diagram, on the page rather than a tab
-away.
+relay record; and its message sequence diagram.
 
 Navigation is the browser's own history: opening a peer pushes an entry, and
 Back returns to the list. Routes live only as long as the session does — the
