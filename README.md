@@ -71,6 +71,14 @@ the previous message in the gutter. A handshake reads directly off it:
 06:18:39.625    +119ms  <- verack
 ```
 
+The actors stay put while the messages scroll under them: the diagram is two
+SVGs stacked in one scroller, a sticky one holding the column headings and the
+actor boxes, and a tall one holding the messages. They share a width, so
+scrolling sideways keeps the lanes lined up without anything having to
+synchronise them. The lanes are sized from the panel rather than fixed, so with
+only two of them the diagram fills the space it has -- 360 px lanes in a 900 px
+panel where it used to draw 250 and leave the rest empty.
+
 This is peer-observer issue #397, done in the browser rather than by exporting to
 an external diagram tool.
 

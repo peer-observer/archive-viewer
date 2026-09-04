@@ -234,6 +234,11 @@ canvas { display: block; width: 100%; }
 
 /* ------------------------------------------------------- sequence diagram */
 .seqsvg { display: block; font-family: var(--mono); }
+#pseq-scroll { overflow: auto; max-height: 70vh; }
+/* The actors stay put while the messages scroll under them. An SVG is a sticky
+   box like any other element, and the two share a width, so scrolling sideways
+   keeps the lanes lined up without anything having to sync them. */
+#pseq-head { position: sticky; top: 0; z-index: 2; background: var(--panel); }
 .seqsvg .life { stroke: var(--rule); stroke-width: 1; }
 .seqsvg .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
 .seqsvg .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
@@ -440,7 +445,10 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <div id="pseq-note"></div>
         <div class="side">
           <div style="overflow:hidden">
-            <div id="pseq-scroll" style="overflow:auto"><svg id="pseq" class="seqsvg"></svg></div>
+            <div id="pseq-scroll">
+              <svg id="pseq-head" class="seqsvg"></svg>
+              <svg id="pseq" class="seqsvg"></svg>
+            </div>
           </div>
           <div class="p" id="pseq-insp">
             <div class="h"><span>Message</span></div>
@@ -2410,8 +2418,13 @@ function renderExchangeLatency() {
  * Two lifelines only: this node and the peer whose page it is. That is the whole
  * shape of it, so nothing here carries a lane index around -- the peer is always
  * lane one, and there is nothing to add, remove or pick between.
+ *
+ * It draws into two SVGs stacked in one scroller: the actors and column headings
+ * in a sticky one that stays put, the messages in a tall one that scrolls under
+ * it. `head` is the height of the first; the second starts at zero.
  */
-const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24, tie: 9, tieDepth: 6 };
+const SEQ = { row: 24, head: 46, gutter: 168, minLane: 190, pad: 12, tie: 9, tieDepth: 6 };
+
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const svg = (tag, attrs = {}) => {
@@ -2464,8 +2477,10 @@ function exchangeBrackets(ties) {
 
 function drawSequence() {
   if (!S.session || S.dead) return;
+  const head = $('pseq-head');
   const node = $('pseq');
   const note = $('pseq-note');
+  head.replaceChildren();
   node.replaceChildren();
   note.replaceChildren();
   if (S.seq.peer == null) return;
@@ -2491,16 +2506,19 @@ function drawSequence() {
 
   if (!page.rows.length) {
     note.append(el('div', 'msg info', 'No messages for this peer in the selected range.'));
+    head.setAttribute('height', 0);
     node.setAttribute('height', 0);
     return;
   }
 
   const ctx = seqLayout(page);
-  node.setAttribute('width', ctx.width);
-  node.setAttribute('height', ctx.height);
-  node.setAttribute('viewBox', `0 0 ${ctx.width} ${ctx.height}`);
+  for (const [svgNode, height] of [[head, SEQ.head], [node, ctx.height]]) {
+    svgNode.setAttribute('width', ctx.width);
+    svgNode.setAttribute('height', height);
+    svgNode.setAttribute('viewBox', `0 0 ${ctx.width} ${height}`);
+  }
 
-  seqHeaders(node, ctx);
+  seqHeaders(head, ctx);
   const rowEls = seqRows(node, ctx);
   seqBrackets(node, ctx, rowEls);
 
@@ -2516,8 +2534,8 @@ function drawSequence() {
 }
 
 /**
- * Everything the three drawing steps below need: the page, the geometry, and
- * the exchange brackets that decide how wide the left gutter has to be.
+ * Everything the drawing steps below need: the page, the geometry, and the
+ * exchange brackets that decide how wide the left gutter has to be.
  */
 function seqLayout(page) {
   // Exchanges are matched within the page, so a request answered on the next
@@ -2529,13 +2547,19 @@ function seqLayout(page) {
     ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
     : 0;
   const gutter = SEQ.gutter + tieWidth;
-  const laneX = (i) => gutter + SEQ.lane * i + SEQ.lane / 2;
+
+  // Two lanes share whatever the panel has, rather than sitting at a fixed
+  // width with dead space beside them. Wider lanes mean longer arrows and more
+  // room for a label between them.
+  const room = ($('pseq-scroll').clientWidth || 900) - gutter - SEQ.pad;
+  const lane = Math.max(SEQ.minLane, Math.floor(room / 2));
+  const laneX = (i) => gutter + lane * i + lane / 2;
 
   return {
-    page, ties, brackets, tieWidth, gutter, laneX,
-    width: gutter + SEQ.lane * 2 + SEQ.pad,
-    height: SEQ.top + page.rows.length * SEQ.row + SEQ.pad,
-    rowY: (i) => SEQ.top + i * SEQ.row + SEQ.row / 2,
+    page, ties, brackets, tieWidth, gutter, lane, laneX,
+    width: gutter + lane * 2 + SEQ.pad,
+    height: page.rows.length * SEQ.row + SEQ.pad,
+    rowY: (i) => i * SEQ.row + SEQ.row / 2,
     nodeX: laneX(0),
     peerX: laneX(1),
     // One peer, so the colour is not distinguishing it from another; it ties
@@ -2546,15 +2570,15 @@ function seqLayout(page) {
   };
 }
 
-/** Column headers in the gutter, and a lifeline for each of the two actors. */
-function seqHeaders(node, ctx) {
-  const { page, laneX, tieWidth, gutter, height, colour } = ctx;
+/** The sticky part: column headings, and an actor box per lifeline. */
+function seqHeaders(head, ctx) {
+  const { page, laneX, lane, tieWidth, gutter, colour } = ctx;
 
   // The date lives here, once, so each row needs only a time of day — a full
   // timestamp on every row is wide enough to run into the delta column beside
   // it.
   const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
-  node.append(
+  head.append(
     svgText({ class: 'headsub', x: tieWidth + 10, y: 22 },
       days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0]),
     svgText({ class: 'headsub', x: tieWidth + 10, y: 34 }, 'UTC'),
@@ -2562,38 +2586,51 @@ function seqHeaders(node, ctx) {
   );
 
   const peer = S.peerRows.find((p) => p.peerId === S.seq.peer);
-  const heads = [
+  const actors = [
     { title: 'this node', sub: '', colour: null },
     { title: `peer ${S.seq.peer}`, sub: peer?.addr ?? '', colour },
   ];
-  heads.forEach((head, i) => {
+  actors.forEach((actor, i) => {
     const x = laneX(i);
-    const life = svg('line', {
-      class: 'life', x1: x, y1: SEQ.top - 12, x2: x, y2: height - SEQ.pad,
-    });
-    // Inline style, not a presentation attribute: `.seqsvg .life` and `.head`
+    const w = lane - 26;
+    const box = svg('rect', { class: 'head', x: x - w / 2, y: 6, width: w, height: 32, rx: 3 });
+    // Inline style, not a presentation attribute: `.seqsvg .head` and `.life`
     // already set `stroke`, and any CSS rule beats a presentation attribute.
-    if (head.colour) {
-      life.style.stroke = head.colour;
-      life.style.strokeOpacity = '0.5';
+    if (actor.colour) box.style.stroke = actor.colour;
+    // A stub of lifeline below the box, so the sticky header still joins up
+    // with the lifelines scrolling beneath it.
+    const stub = svg('line', { class: 'life', x1: x, y1: 38, x2: x, y2: SEQ.head });
+    if (actor.colour) {
+      stub.style.stroke = actor.colour;
+      stub.style.strokeOpacity = '0.5';
     }
-    const w = SEQ.lane - 26;
-    const box = svg('rect', { class: 'head', x: x - w / 2, y: 8, width: w, height: 32, rx: 3 });
-    if (head.colour) box.style.stroke = head.colour;
-    node.append(life, box);
+    head.append(box, stub);
     // Centre the title in the box when there is no subtitle under it.
-    node.append(svgText(
-      { class: 'headtext', x, y: head.sub ? 22 : 28, 'text-anchor': 'middle' }, head.title));
-    if (head.sub) {
-      node.append(svgText({ class: 'headsub', x, y: 34, 'text-anchor': 'middle' },
-        head.sub.length > 26 ? `${head.sub.slice(0, 25)}…` : head.sub));
+    head.append(svgText(
+      { class: 'headtext', x, y: actor.sub ? 20 : 26, 'text-anchor': 'middle' }, actor.title));
+    if (actor.sub) {
+      const room = Math.floor(w / 6.1);
+      head.append(svgText({ class: 'headsub', x, y: 32, 'text-anchor': 'middle' },
+        actor.sub.length > room ? `${actor.sub.slice(0, room - 1)}…` : actor.sub));
     }
   });
 }
 
+
 /** One row per message, returned so the brackets can light them up. */
 function seqRows(node, ctx) {
-  const { page, tieWidth, gutter, width, rowY, peerX, colour } = ctx;
+  const { page, tieWidth, gutter, width, height, rowY, nodeX, peerX, colour } = ctx;
+
+  // The lifelines run the whole height of the scrolling part; the header holds
+  // only a stub of each, to join up with these when it is stuck at the top.
+  for (const [x, lineColour] of [[nodeX, null], [peerX, colour]]) {
+    const life = svg("line", { class: "life", x1: x, y1: 0, x2: x, y2: height });
+    if (lineColour) {
+      life.style.stroke = lineColour;
+      life.style.strokeOpacity = "0.5";
+    }
+    node.append(life);
+  }
 
   // Label plates go in their own layer, under every row: they knock the
   // lifelines out from under a label, but must stay below the row hover fill,
