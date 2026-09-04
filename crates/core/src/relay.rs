@@ -108,6 +108,9 @@ pub struct Relay {
     pub announcements: u64,
     pub deliveries: u64,
     pub duplicate_deliveries: u64,
+    /// Wire bytes of every transaction received.
+    pub delivered_bytes: u64,
+    /// Of those, the ones that were already held.
     pub duplicate_bytes: u64,
     /// Announcements of an item someone had already announced.
     pub late_announcements: u64,
@@ -149,6 +152,12 @@ impl Relay {
             total.merge(relay);
         }
         total
+    }
+
+    /// Share of received transaction bytes that were bytes already held.
+    pub fn wasted_share(&self) -> Option<f64> {
+        (self.delivered_bytes > 0)
+            .then(|| self.duplicate_bytes as f64 / self.delivered_bytes as f64)
     }
 
     /// How many times a transaction was received for each time it was needed.
@@ -240,6 +249,7 @@ impl Relay {
         };
 
         self.deliveries += 1;
+        self.delivered_bytes += size;
         let now = self.offset(timestamp);
         match self.items.get_mut(&key) {
             Some(entry) => {
@@ -461,5 +471,51 @@ mod tests {
         assert_eq!(totals.duplicate, 1);
         assert_eq!(totals.duplicate_bytes, 500);
         assert_eq!(totals.lag.count(), relay.late_announcements);
+    }
+}
+
+#[cfg(test)]
+mod waste_tests {
+    use super::*;
+    use crate::proto::{
+        bitcoin_primitives::{ConnType, Transaction},
+        ebpf_extractor::message::{Metadata, Tx},
+    };
+
+    fn delivery(peer_id: u64, seed: u8, size: u64) -> MessageEvent {
+        MessageEvent {
+            meta: Metadata {
+                peer_id,
+                addr: format!("10.0.0.{peer_id}:8333"),
+                conn_type: ConnType::Inbound as i32,
+                command: "tx".to_string(),
+                inbound: true,
+                size,
+            },
+            msg: Some(Msg::Tx(Tx {
+                tx: Transaction {
+                    txid: vec![seed; 32],
+                    wtxid: vec![seed; 32],
+                    raw: None,
+                },
+            })),
+        }
+    }
+
+    #[test]
+    fn waste_is_a_share_of_what_actually_arrived() {
+        let mut relay = Relay::new();
+        assert_eq!(relay.wasted_share(), None, "nothing arrived yet");
+
+        relay.record(1_000, &delivery(1, 0xA, 300));
+        relay.record(1_100, &delivery(2, 0xB, 700));
+        assert_eq!(relay.delivered_bytes, 1_000);
+        assert_eq!(relay.wasted_share(), Some(0.0), "no duplicates yet");
+
+        // The same transaction again: those bytes were already held.
+        relay.record(1_200, &delivery(3, 0xA, 300));
+        assert_eq!(relay.delivered_bytes, 1_300);
+        assert_eq!(relay.duplicate_bytes, 300);
+        assert_eq!(relay.wasted_share(), Some(300.0 / 1_300.0));
     }
 }

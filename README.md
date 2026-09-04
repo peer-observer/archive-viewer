@@ -158,27 +158,27 @@ ingest, which would cost peers times bins of memory for a view most archives
 never open. That does mean it covers only the events retention kept, and it says
 so when that is not all of them.
 
-**Relay** — the question an archive can answer that a running node cannot be
-asked after the fact: for every transaction, which peer announced it first, how
-far behind the others were, and how many bytes went on receiving something the
-node already had. Per peer that is a scorecard — first-to-announce count against
-duplicate bytes contributed — which is the evidence for whether a peer is
-earning its connection slot. Beside it, how each kind of request fared across every
-peer: how many were sent, how many were answered, which side stayed silent when
-they were not, and how long the answers took.
-
-On a 1.07 GB archive of a live node:
+**Relay** — every transaction reaches a node more than once, and this is what
+that costs. It leads with the share of received transaction bytes that were
+bytes already held, because that number decides whether the rest is worth
+reading:
 
 ```
-transactions      40,392        1,037,820 announcements
-delivered         49,360        15,674 already held
-received twice    1.47x         3.2 MB spent again
-median lag        5.3 s         behind the winner
+wasted        21.5%     3.2 MB of 14.9 MB received
+transactions  40,392    announced 1,037,820 times by 96 peers
+downloaded    49,360    15,674 already held
+typical wait  3.6 s     from first hearing to holding
 ```
 
-That 5.3 s is Bitcoin Core's own announcement scheduling showing up in the data:
-inventory is broadcast to inbound peers on a Poisson timer averaging five
-seconds, so most of what a peer "loses" a race by is not the network.
+Then the scorecard: which peers announced first, how often they were the first
+of their own announcements, and what the late ones cost. A peer connected longer
+wins more races by being there, so the rate beside the count is what makes two
+comparable — on the sample archive one peer wins 57.7% of its announcements for
+4 kB of waste, and another wins 11.5% for 339 kB.
+
+**Exchanges** — what happened when either side asked the other for something:
+requests of each kind sent, answered, unanswered, and how long the answers took,
+in each direction. Selecting a row shows that kind's reply times.
 
 ### What the request/reply numbers do and do not mean
 

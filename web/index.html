@@ -195,6 +195,8 @@ canvas { display: block; width: 100%; }
 .grow { flex: 1; }
 .check { display: flex; align-items: center; gap: 4px; }
 .mb { margin-bottom: 12px; }
+/* The sentence a view opens with, saying what question it answers. */
+.lede { max-width: 62ch; margin: 0 0 12px; color: var(--ink-2); }
 @media (max-width: 1100px) { .cols.c2, .side { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------------------------------------------------------------- events */
@@ -287,6 +289,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
   <button data-tab="peers" aria-selected="false">Peers</button>
   <button data-tab="activity" aria-selected="false">Activity</button>
   <button data-tab="relay" aria-selected="false">Relay</button>
+  <button data-tab="exchanges" aria-selected="false">Exchanges</button>
   <button data-tab="events" aria-selected="false">Events</button>
 
 </div>
@@ -524,35 +527,65 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
 
     <!-- ---------------------------------------------------------- relay -->
     <div id="tab-relay" hidden>
+      <p class="lede">
+        Every transaction reaches this node more than once. The peers that announce it
+        first are doing the work; the rest arrive to find it already held, and the bytes
+        they spent getting there were spent again.
+      </p>
       <div id="rnote"></div>
       <div id="rstats" class="kvbar"></div>
-      <div class="cols c2 mb">
-        <div class="p">
-          <div class="h"><span>How far behind the losers were</span><span class="sp"></span>
-            <span class="dim">announcement lag</span></div>
-          <div class="body" id="rlag"></div>
+
+      <div class="p mb">
+        <div class="h">
+          <span>Which peers told you first</span>
+          <input type="search" id="rsearch" placeholder="address or peer id">
+          <span class="sp"></span>
+          <span class="dim" id="rcount"></span>
         </div>
-        <div class="p">
-          <div class="h"><span>From first hearing to holding it</span><span class="sp"></span>
-            <span class="dim">announcement to delivery</span></div>
-          <div class="body" id="rheld"></div>
+        <div class="scroll" style="max-height:56vh"><table id="trelay"></table></div>
+        <div class="body dim">
+          A peer that has been connected longer wins more races simply by being there, so
+          the rate beside the count is what makes two peers comparable. Wasted bytes are
+          transactions this node already had when they arrived.
         </div>
       </div>
-      <div class="side">
+
+      <div class="cols c2">
         <div class="p">
-          <div class="h"><span>Peer scorecard</span>
-            <input type="search" id="rsearch" placeholder="address or peer id">
-            <span class="sp"></span><span class="dim" id="rcount"></span></div>
-          <div class="scroll" style="max-height:calc(100vh - 420px)"><table id="trelay"></table></div>
+          <div class="h"><span>How late the other announcements were</span></div>
+          <div class="body" id="rlag"></div>
+          <div class="body dim">
+            Mostly not the network. Bitcoin Core holds announcements back on a Poisson
+            timer averaging five seconds to inbound peers and two to outbound ones, so
+            this is largely its own scheduling seen from the other side.
+          </div>
         </div>
         <div class="p">
-          <div class="h"><span>Requests and replies</span></div>
-          <div class="scroll" style="max-height:38vh"><table id="texch"></table></div>
-          <div class="body" id="rlat"></div>
-          <div class="body dim" id="rexchnote"></div>
+          <div class="h"><span>How long this node went without the transaction</span></div>
+          <div class="body" id="rheld"></div>
+          <div class="body dim">
+            From the first announcement by anyone to holding the transaction, so it
+            includes Core's own request delay, not just the peer's response time.
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- ------------------------------------------------------ exchanges -->
+    <div id="tab-exchanges" hidden>
+      <p class="lede">
+        What happened when either side asked the other for something: how many requests
+        of each kind went out, how many were answered, and how long the answers took.
+      </p>
+      <div class="p mb">
+        <div class="h"><span>Requests and replies</span><span class="sp"></span>
+          <span class="dim">select a row for its reply times</span></div>
+        <div class="scroll" style="max-height:46vh"><table id="texch"></table></div>
+      </div>
+      <div class="p mb"><div class="body" id="rlat"></div></div>
+      <div class="dim" id="rexchnote"></div>
+    </div>
+
   </section>
 </main>
 
@@ -2164,43 +2197,44 @@ function renderRelay() {
   if (!page) return;
   S.relayRows = page.rows;
 
-  const box = $("rnote");
+  const box = $('rnote');
   box.replaceChildren();
   if (!page.announcements && !page.deliveries) {
     box.append(note('No transaction relay in this archive.',
-      'This view is built from inbound inv and tx messages. An archive captured without ' +
-      '--messages, or with only connection events, has none.'));
+      'This view is built from inbound inv and tx messages. An archive captured without '
+      + '--messages, or with only connection events, has none.'));
     $('rstats').replaceChildren();
     $('trelay').replaceChildren();
-    $('texch').replaceChildren();
-    distribution($('rlag'), null, 'Nothing announced.');
-    distribution($('rheld'), null, 'Nothing delivered.');
-    renderExchanges();
+    $('rcount').textContent = '';
+    distribution($('rlag'), null, 'Nothing was announced.');
+    distribution($('rheld'), null, 'Nothing was delivered.');
     return;
   }
   if (page.capped) {
     box.append(note('Transaction tracking stopped early.',
-      `The archive announced more than ${num(page.maxItems)} distinct transactions, which is as ` +
-      `many as this keeps. ${num(page.untracked)} later announcements were not counted; ` +
-      'everything up to that point is exact.'));
+      `The archive announced more than ${num(page.maxItems)} distinct transactions, which is as `
+      + `many as this keeps. ${num(page.untracked)} later announcements were not counted; `
+      + 'everything up to that point is exact.'));
   }
 
-  const factor = page.duplicateFactor;
-  const wasted = page.deliveries ? page.duplicateBytes : 0;
-  kvbar("rstats", [
-    ['transactions', num(page.items), `${num(page.announcements)} announcements`],
-    ['heard from', `${num(page.peers)}`, 'peers'],
-    ['delivered', num(page.deliveries),
-      page.duplicateDeliveries ? `${num(page.duplicateDeliveries)} already held` : 'no duplicates'],
-    ['received twice over', factor == null ? '—' : `${factor.toFixed(2)}×`,
-      wasted ? `${bytes(wasted)} spent again` : ''],
-    ['median lag', page.lag.p50Ms == null ? '—' : dur(page.lag.p50Ms), 'behind the winner'],
+  // The cost comes first: it is the number that decides whether any of the rest
+  // is worth reading.
+  kvbar('rstats', [
+    ['wasted', page.wastedShare == null ? '—' : `${(page.wastedShare * 100).toFixed(1)}%`,
+      `${bytes(page.duplicateBytes)} of ${bytes(page.deliveredBytes)} received`],
+    ['transactions', num(page.items),
+      `announced ${num(page.announcements)} times by ${num(page.peers)} peers`],
+    ['downloaded', num(page.deliveries),
+      page.duplicateDeliveries
+        ? `${num(page.duplicateDeliveries)} already held`
+        : 'none already held'],
+    ['typical wait', page.heardToHeld.p50Ms == null ? '—' : dur(page.heardToHeld.p50Ms),
+      'from first hearing to holding'],
   ]);
 
   distribution($('rlag'), page.lag, 'Every announcement was the first one.');
   distribution($('rheld'), page.heardToHeld, 'Nothing was both announced and delivered.');
   paintRelay();
-  renderExchanges();
 }
 
 function paintRelay() {
@@ -2211,34 +2245,31 @@ function paintRelay() {
     : S.relayRows;
   $('rcount').textContent = `${num(rows.length)} peers`;
 
-  // `first` and `late` are counts, so a long-lived peer wins on volume alone;
-  // the win rate beside them is what makes two peers comparable.
-  const cols = [[null, 'peer', 0], [null, 'address', 0], ['first', 'first', 1],
-                ['win', 'win rate', 1], ['late', 'behind', 1], ['lag', 'median lag', 1],
-                ['delivered', 'delivered', 1], ['duplicate', 'dupes', 1],
-                ['duplicateBytes', 'wasted', 1]];
-  const thead = sortHead(cols, S.relaySort, renderRelay);
+  const thead = sortHead([
+    [null, 'peer', 0], [null, 'address', 0],
+    ['first', 'told you first', 1], ['win', 'of its own', 1],
+    ['late', 'arrived late', 1], ['lag', 'typically behind by', 1],
+    ['delivered', 'sent you', 1], ['duplicate', 'already had', 1],
+    ['duplicateBytes', 'wasted', 1],
+  ], S.relaySort, renderRelay);
 
-
-  const tbody = el('tbody');
-  for (const p of rows.slice(0, 3000)) {
-    const tr = el('tr', S.peer === p.peerId ? 'on' : null);
-    tr.append(
+  $('trelay').replaceChildren(thead, bodyOf(rows.slice(0, 3000).map((p) => {
+    const line = row(
       td(String(p.peerId), 'n'),
       td(p.addr ?? 'not seen', 'm'),
       td(num(p.first), 'n'),
       td(p.winRatio == null ? '—' : `${(p.winRatio * 100).toFixed(1)}%`, 'n'),
       td(num(p.late), 'n'),
-      td(p.lagP50Ms == null ? '—' : dur(p.lagP50Ms), 'n'),
+      td(p.lagP50Ms == null ? 'never late' : dur(p.lagP50Ms), 'n'),
       td(num(p.delivered), 'n'),
       td(num(p.duplicate), 'n'),
       td(p.duplicateBytes ? bytes(p.duplicateBytes) : '—', 'n'),
     );
-    tr.addEventListener('click', () => openPeer(p.peerId));
-    tbody.append(tr);
-  }
-  $('trelay').replaceChildren(thead, tbody);
+    line.addEventListener('click', () => openPeer(p.peerId));
+    return line;
+  })));
 }
+
 
 /**
  * How each kind of request fared, across every peer.
@@ -2344,26 +2375,32 @@ function renderExchangeLatency() {
   const selected = S.exchangeRows.find((r) => r.request === S.exchangeSel);
   if (!selected) return;
 
-  const sides = [
-    ['peers answered', selected.peerLatency, selected.unansweredByPeers, 'No peer answered one of these.'],
-    ['this node answered', selected.ourLatency, selected.unansweredByUs, 'This node was never asked.'],
-  ];
-  for (const [label, l, silent, empty] of sides) {
-    const head = el('div', 'dim');
-    head.style.cssText = 'margin-top:8px;font-family:var(--mono);font-size:11px';
+  const cols = el('div', 'cols c2');
+  for (const [label, l, silent, empty] of [
+    ['peers answered', selected.peerLatency, selected.unansweredByPeers,
+      'No peer answered one of these.'],
+    ['this node answered', selected.ourLatency, selected.unansweredByUs,
+      'This node was never asked.'],
+  ]) {
+    const panel = el('div');
+    const head = el('div', 'dim mono');
+    head.style.cssText = 'font-size:11px;margin-bottom:2px';
     head.textContent = `${selected.request} — ${label}`;
-    box.append(head);
+    panel.append(head);
     const chart = el('div');
     distribution(chart, l, empty);
-    box.append(chart);
+    panel.append(chart);
     if (silent && !selected.optional && selected.repliesCaptured) {
       const line = el('div', 'dim');
       line.style.fontSize = '11px';
       line.textContent = `${num(silent)} more went unanswered.`;
-      box.append(line);
+      panel.append(line);
     }
+    cols.append(panel);
   }
+  box.append(cols);
 }
+
 
 /* ------------------------------------------------------- sequence diagram */
 
@@ -2694,7 +2731,7 @@ function seqBrackets(node, ctx, rowEls) {
 /* ---------------------------------------------------------------- routing */
 
 // Display order, with the peer page tucked in beside the list it belongs to.
-const TABS = ["overview", "peers", "peer", "activity", "relay", "events"];
+const TABS = ["overview", "peers", "peer", "activity", "relay", "exchanges", "events"];
 
 /**
  * Navigation goes through the browser's own history, so Back does what Back
@@ -2748,6 +2785,7 @@ const DRAW = {
   peer: (route) => renderPeerPage(route.peerId),
   events: refreshEvents,
   relay: renderRelay,
+  exchanges: renderExchanges,
   activity: () => { renderDurations(); drawActivity(); },
 };
 
