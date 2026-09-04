@@ -163,6 +163,15 @@ tbody tr.on { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 /* ---------------------------------------------------------------- charts */
 .chart { position: relative; }
 canvas { display: block; width: 100%; }
+/* The stacked charts get their height here, not from the `height` attribute.
+   That attribute is the canvas backing store, and drawing scales it by the
+   device pixel ratio -- so a chart that read its own attribute back would grow
+   by that ratio on every redraw, which on a retina display means doubling on
+   every frame of a brush drag. CSS owns the box; the script owns the pixels. */
+#tl { height: 200px; }
+#tl2 { height: 180px; }
+#ptl { height: 170px; }
+
 .legend { display: flex; flex-wrap: wrap; gap: 3px 16px; padding: 8px 10px 0; }
 .legend .it { color: var(--ink-2); white-space: nowrap; cursor: pointer; font-size: 12px; }
 .legend .it b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
@@ -319,7 +328,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       <div class="p mb">
         <div class="h"><span>All events over time</span><span class="sp"></span>
           <span class="dim" id="tl-meta"></span></div>
-        <div class="chart"><canvas id="tl" height="200"></canvas><div id="tip" hidden></div></div>
+        <div class="chart"><canvas id="tl"></canvas><div id="tip" hidden></div></div>
         <div class="legend" id="tl-legend"></div>
         <div class="body dim" style="padding-top:8px">
           Drag to select a time range for the Events tab. Click a group to hide it.
@@ -333,7 +342,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <span class="sp"></span>
           <span class="dim" id="tl2-meta"></span>
         </div>
-        <div class="chart"><canvas id="tl2" height="180"></canvas><div id="tip2" hidden></div></div>
+        <div class="chart"><canvas id="tl2"></canvas><div id="tip2" hidden></div></div>
         <div class="legend" id="tl2-legend"></div>
       </div>
 
@@ -394,7 +403,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       <div class="p mb">
         <div class="h"><span>Traffic over this connection</span><span class="sp"></span>
           <span class="dim" id="ptl-meta"></span></div>
-        <div class="chart"><canvas id="ptl" height="170"></canvas><div id="ptip" hidden></div></div>
+        <div class="chart"><canvas id="ptl"></canvas><div id="ptip" hidden></div></div>
         <div class="legend" id="ptl-legend"></div>
       </div>
 
@@ -1025,12 +1034,13 @@ const PITCH = 5;
 function drawChart(id, fetch, hidden, colorFor, onModel, overlay) {
   const canvas = $(id);
   const width = canvas.parentElement.clientWidth;
-  if (!width) return;                              // hidden tab: nothing to size to
-  const height = Number(canvas.getAttribute('height'));
+  // The height comes from the stylesheet rather than the `height` attribute,
+  // which the backing-store line below rewrites.
+  const height = canvas.clientHeight;
+  if (!width || !height) return;                   // hidden tab: nothing to size to
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(width * dpr));
-  canvas.height = Math.floor(height * dpr);
-  canvas.style.height = `${height}px`;
+  canvas.height = Math.max(1, Math.floor(height * dpr));
 
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
