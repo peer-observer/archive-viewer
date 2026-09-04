@@ -481,6 +481,59 @@ fn the_sequence_view_ties_requests_to_their_replies() {
     );
 }
 
+/// The payload has to reach the matcher, not just the label. Nothing else
+/// covers that wiring: the matcher's own tests hand it keys directly, and the
+/// decoding is unit-tested on its own.
+#[test]
+fn a_reply_is_tied_to_the_request_that_named_it() {
+    // Two `getdata` in flight for one peer, answered in the other order --
+    // which is what Bitcoin Core does. Pairing by arrival would give each
+    // transaction the wrong request; the txids give each the right one.
+    let events = vec![
+        message_naming(1_000, 3, "getdata", false, 37, &[0xa1]),
+        message_naming(1_010, 3, "getdata", false, 37, &[0xb2]),
+        message_naming(1_100, 3, "tx", true, 250, &[0xb2]),
+        message_naming(1_200, 3, "tx", true, 190, &[0xa1]),
+        // Answering something nobody asked for ties to nothing at all, rather
+        // than to whichever request happens to be open.
+        message_naming(1_300, 3, "tx", true, 190, &[0xcc]),
+    ];
+    let stream = record_stream(&header(1_700_000_000, Some(false)), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("keyed.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let mut cache = QueryCache::new();
+    let page = view::sequence(&analysis, &mut cache, &Filter::default(), 0, 100);
+    let ties: Vec<(u64, u64, u64)> = page["ties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["request"].as_u64().unwrap(),
+                t["reply"].as_u64().unwrap(),
+                t["elapsedMs"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ties,
+        vec![(1, 2, 90), (0, 3, 200)],
+        "each transaction answers the getdata that named it, out of order"
+    );
+
+    // And the same decode gives the label its line.
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["detail"], "1x wtx");
+    assert_eq!(
+        rows[2]["detail"],
+        Value::Null,
+        "a tx says nothing its size does not"
+    );
+}
+
 #[test]
 fn sequence_ties_are_positions_within_the_page() {
     let analysis = loaded();

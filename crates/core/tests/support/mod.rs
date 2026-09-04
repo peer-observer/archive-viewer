@@ -9,11 +9,13 @@
 #![allow(dead_code)]
 
 use archive_viewer_core::proto::{
-    bitcoin_primitives::ConnType,
+    bitcoin_primitives::{inventory_item::Item, ConnType, InventoryItem, Transaction},
     ebpf_extractor::{
         self,
         connection::{self, Connection, ConnectionEvent, InboundConnection},
-        message::{message_event, MessageEvent, Metadata, Ping, Unknown},
+        message::{
+            message_event, GetData, Inv, MessageEvent, Metadata, NotFound, Ping, Pong, Tx, Unknown,
+        },
     },
     event::{event, Event},
     header::ArchiveHeader,
@@ -30,8 +32,71 @@ pub fn header(created: u64, low_data: Option<bool>) -> ArchiveHeader {
     ArchiveHeader { created, low_data }
 }
 
-/// An `ebpf.message` event, the most common kind by far.
+/// An `ebpf.message` event with metadata and no body.
+///
+/// Most tests care only about the command, direction, size and time, which is
+/// all the metadata carries. The body is left out rather than filled with
+/// something arbitrary: a message labelled `inv` whose body is a `ping` is a
+/// fixture that lies, and anything reading payloads -- the sequence diagram's
+/// reply matching, the labels -- would be tested against a fiction. Use
+/// [`message_naming`] where the body matters.
 pub fn message_event(ts: u64, peer_id: u64, command: &str, inbound: bool, size: u64) -> Event {
+    message_body(ts, peer_id, command, inbound, size, None)
+}
+
+/// An `ebpf.message` event carrying a body that matches its command, so that
+/// the hashes the message names are really in the archive.
+///
+/// `hashes` gives one distinguishing byte per item; each becomes a 32-byte hash
+/// of that byte repeated. A `tx` takes one, and its wtxid differs from its txid
+/// as a real transaction's does, so that matching on either is exercised.
+pub fn message_naming(
+    ts: u64,
+    peer_id: u64,
+    command: &str,
+    inbound: bool,
+    size: u64,
+    hashes: &[u8],
+) -> Event {
+    let hash = |b: u8| vec![b; 32];
+    let items = || -> Vec<InventoryItem> {
+        hashes
+            .iter()
+            .map(|b| InventoryItem {
+                item: Some(Item::Wtx(hash(*b))),
+            })
+            .collect()
+    };
+    let body = match command {
+        "inv" => Some(message_event::Msg::Inv(Inv { items: items() })),
+        "getdata" => Some(message_event::Msg::Getdata(GetData { items: items() })),
+        "notfound" => Some(message_event::Msg::Notfound(NotFound { items: items() })),
+        "tx" => Some(message_event::Msg::Tx(Tx {
+            tx: Transaction {
+                txid: hash(hashes[0]),
+                wtxid: hash(hashes[0] ^ 0x80),
+                raw: None,
+            },
+        })),
+        "ping" => Some(message_event::Msg::Ping(Ping {
+            value: u64::from(hashes[0]),
+        })),
+        "pong" => Some(message_event::Msg::Pong(Pong {
+            value: u64::from(hashes[0]),
+        })),
+        other => panic!("no body is defined for a {other} in the test helpers"),
+    };
+    message_body(ts, peer_id, command, inbound, size, body)
+}
+
+fn message_body(
+    ts: u64,
+    peer_id: u64,
+    command: &str,
+    inbound: bool,
+    size: u64,
+    msg: Option<message_event::Msg>,
+) -> Event {
     Event {
         timestamp: ts,
         peer_observer_event: Some(event::PeerObserverEvent::EbpfExtractor(
@@ -45,13 +110,12 @@ pub fn message_event(ts: u64, peer_id: u64, command: &str, inbound: bool, size: 
                         inbound,
                         size,
                     },
-                    msg: Some(message_event::Msg::Ping(Ping { value: ts })),
+                    msg,
                 })),
             },
         )),
     }
 }
-
 /// An `ebpf.connection` inbound-connection event.
 pub fn connection_event(ts: u64, peer_id: u64) -> Event {
     Event {
