@@ -1785,8 +1785,16 @@ function drawActivity() {
   drawActivityAxis(ctx, model, columns, height);
 }
 
+/**
+ * Red is for the rare thing, not the routine one. An eviction is Bitcoin Core
+ * doing its job whenever the inbound slots are full, and on a churning node
+ * there are thousands; misbehaviour is a peer breaking the protocol, and there
+ * are a handful. Colouring by frequency rather than by severity would paint the
+ * chart red and leave the one mark worth looking at indistinguishable.
+ */
 const markColour = (kind) => cssVar(
-  kind === 'inbound_evicted' ? '--bad' : kind === 'misbehaving' ? '--warn' : '--ink-2');
+  kind === 'misbehaving' ? '--bad' : kind === 'inbound_evicted' ? '--warn' : '--ink-2');
+
 
 function drawActivityAxis(ctx, model, columns, height) {
   const y = height - ACT.bottom + 6;
