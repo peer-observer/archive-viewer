@@ -167,19 +167,20 @@ canvas { display: block; width: 100%; }
 .legend .it { color: var(--ink-2); white-space: nowrap; cursor: pointer; font-size: 12px; }
 .legend .it b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 .legend .it.off { opacity: .35; }
-#tip, #tip2, #atip {
+#tip, #tip2, #atip, #ptip {
   position: absolute; pointer-events: none; z-index: 20;
   background: var(--panel); border: 1px solid var(--rule-2); border-radius: 3px;
   padding: 6px 8px; box-shadow: 0 3px 12px rgb(0 0 0 / .2); min-width: 150px; font-size: 12px;
 }
-#tip .t, #tip2 .t, #atip .t { color: var(--ink-3); font-family: var(--mono); font-size: 11px; margin-bottom: 4px; }
-#tip td, #tip2 td, #atip td { border: none; padding: 0; }
-#tip td.n, #tip2 td.n, #atip td.n { padding-left: 14px; }
+#tip .t, #tip2 .t, #atip .t, #ptip .t { color: var(--ink-3); font-family: var(--mono); font-size: 11px; margin-bottom: 4px; }
+#tip td, #tip2 td, #atip td, #ptip td { border: none; padding: 0; }
+#tip td.n, #tip2 td.n, #atip td.n, #ptip td.n { padding-left: 14px; }
 
 /* --------------------------------------------------------------- layouts */
 .cols { display: grid; gap: 12px; align-items: start; }
 .cols.c2 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .side { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(340px, 26%); align-items: start; }
+.side.solo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1100px) { .cols.c2, .side { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------------------------------------------------------------- events */
@@ -216,32 +217,32 @@ canvas { display: block; width: 100%; }
 .seg button.on { background: var(--accent); color: #fff; }
 
 /* ------------------------------------------------------- sequence diagram */
-#seq { display: block; font-family: var(--mono); }
-#seq .life { stroke: var(--rule); stroke-width: 1; }
-#seq .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
-#seq .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
-#seq .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
-#seq .arrow { stroke-width: 1.5; fill: none; }
-#seq .label { font-size: 11px; fill: var(--ink-2); }
-#seq .elapsed { fill: var(--ink-3); }
+.seqsvg { display: block; font-family: var(--mono); }
+.seqsvg .life { stroke: var(--rule); stroke-width: 1; }
+.seqsvg .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
+.seqsvg .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
+.seqsvg .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
+.seqsvg .arrow { stroke-width: 1.5; fill: none; }
+.seqsvg .label { font-size: 11px; fill: var(--ink-2); }
+.seqsvg .elapsed { fill: var(--ink-3); }
 /* Knocks a crossed lifeline out from under a label: an arrow to a distant
    lane runs straight through the lifelines in between. */
-#seq .plate { fill: var(--panel); }
-#seq .tie { fill: none; stroke-width: 1.25; stroke-opacity: 0.4; pointer-events: none; }
-#seq .tie.on { stroke-opacity: 1; stroke-width: 2; }
-#seq .row.tied .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
-#seq .gutter { fill: var(--ink-3); font-size: 10px; }
-#seq .hit { fill: transparent; cursor: pointer; }
-#seq .row:hover .hit { fill: var(--panel-2); }
-#seq .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
-#seq .note { fill: var(--panel-2); stroke: var(--rule-2); stroke-opacity: 0.6; }
-#seq .notetext { fill: var(--ink-2); font-size: 10px; }
+.seqsvg .plate { fill: var(--panel); }
+.seqsvg .tie { fill: none; stroke-width: 1.25; stroke-opacity: 0.4; pointer-events: none; }
+.seqsvg .tie.on { stroke-opacity: 1; stroke-width: 2; }
+.seqsvg .row.tied .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+.seqsvg .gutter { fill: var(--ink-3); font-size: 10px; }
+.seqsvg .hit { fill: transparent; cursor: pointer; }
+.seqsvg .row:hover .hit { fill: var(--panel-2); }
+.seqsvg .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
+.seqsvg .note { fill: var(--panel-2); stroke: var(--rule-2); stroke-opacity: 0.6; }
+.seqsvg .notetext { fill: var(--ink-2); font-size: 10px; }
 /* Removing a lifeline happens on the lifeline's own header: a bare ×, with an
    invisible rect behind it only to give the click a comfortable target. */
-#seq .rm { cursor: pointer; }
-#seq .rmhit { fill: none; stroke: none; pointer-events: all; }
-#seq .rmx { fill: var(--ink-3); stroke: none; font-size: 15px; font-family: var(--sans); }
-#seq .rm:hover .rmx { fill: var(--bad); }
+.seqsvg .rm { cursor: pointer; }
+.seqsvg .rmhit { fill: none; stroke: none; pointer-events: all; }
+.seqsvg .rmx { fill: var(--ink-3); stroke: none; font-size: 15px; font-family: var(--sans); }
+.seqsvg .rm:hover .rmx { fill: var(--bad); }
 
 /* -------------------------------------------------------------- start/load */
 #start { max-width: 620px; margin: 8vh auto; text-align: center; }
@@ -373,6 +374,71 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       </div>
     </div>
 
+    <!-- ------------------------------------------------------- peer page -->
+    <div id="tab-peer" hidden>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+        <button class="b" id="peer-back">&larr; all peers</button>
+        <span class="mono" id="peer-title"></span>
+        <span style="flex:1"></span>
+        <button class="b" id="peer-events">Events &rarr;</button>
+      </div>
+      <div id="peer-missing"></div>
+      <div id="peer-stats" class="kvbar"></div>
+
+      <div class="p" style="margin-bottom:12px">
+        <div class="h"><span>Traffic over this connection</span><span class="sp"></span>
+          <span class="dim" id="ptl-meta"></span></div>
+        <div class="chart"><canvas id="ptl" height="170"></canvas><div id="ptip" hidden></div></div>
+        <div class="legend" id="ptl-legend"></div>
+      </div>
+
+      <div class="cols c2" style="margin-bottom:12px">
+        <div class="p">
+          <div class="h"><span>Messages by command</span></div>
+          <div class="scroll" style="max-height:40vh"><table id="pcmd"></table></div>
+        </div>
+        <div>
+          <div class="p" style="margin-bottom:12px">
+            <div class="h"><span id="plife-head">Connection lifecycle</span></div>
+            <div class="scroll" style="max-height:22vh"><table id="plife"></table></div>
+          </div>
+          <div class="p" id="prelay-panel">
+            <div class="h"><span>Transaction relay</span></div>
+            <div class="body" id="prelay"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="p">
+        <div class="h">
+          <span>Message sequence</span>
+          <span class="sp"></span>
+          <button class="b" id="pseq-prev">&larr; earlier</button>
+          <span class="dim mono" id="pseq-pos"></span>
+          <button class="b" id="pseq-next">later &rarr;</button>
+          <select id="pseq-limit" title="Messages per screen">
+            <option value="100" selected>100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+          <label class="dim" style="display:flex;align-items:center;gap:4px"
+                 title="Link each request to the reply it most likely caused">
+            <input type="checkbox" id="pseq-ties" checked> link replies
+          </label>
+        </div>
+        <div id="pseq-note"></div>
+        <div class="side">
+          <div style="overflow:hidden">
+            <div id="pseq-scroll" style="overflow:auto"><svg id="pseq" class="seqsvg"></svg></div>
+          </div>
+          <div class="p" id="pseq-insp">
+            <div class="h"><span>Message</span></div>
+            <div class="body dim">Select a message in the diagram to decode it.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- --------------------------------------------------------- events -->
     <div id="tab-events" hidden>
       <div id="enote"></div>
@@ -473,7 +539,6 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
     <!-- ------------------------------------------------------- sequence -->
     <div id="tab-sequence" hidden>
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
-        <span id="seq-back"></span>
         <select id="seq-add"><option value="">add peer&hellip;</option></select>
         <span style="flex:1"></span>
         <button class="b" id="seq-prev">&larr; earlier</button>
@@ -492,7 +557,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
       <div id="seq-note"></div>
       <div class="side">
         <div class="p" style="overflow:hidden">
-          <div id="seq-scroll" style="overflow:auto"><svg id="seq"></svg></div>
+          <div id="seq-scroll" style="overflow:auto"><svg id="seq" class="seqsvg"></svg></div>
         </div>
         <div class="p" id="seq-insp">
           <div class="h"><span>Message</span></div>
@@ -578,14 +643,15 @@ const S = {
   session: null, dead: false,
   summary: null,
   charts: {},                       // canvas id -> last drawn model
-  hidden: { tl: new Set(), tl2: new Set() },
+  hidden: { tl: new Set(), tl2: new Set(), ptl: new Set() },
   group: null,                      // group shown in the rate-by-type chart
   filter: { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' },
-  event: null, peer: null, returnToPeer: null,
+  event: null, peer: null, returnToPeer: null, route: null,
   peerSort: { key: 'events', desc: true }, peerRows: [],
   peerMode: 'peers',                // 'peers' or 'networks'
   netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
-  seqPeers: [], seqOffset: 0, seqSelected: null,
+  seq: { peers: [], offset: 0, selected: null, rows: [] },
+  peerSeq: { peers: [], offset: 0, selected: null, rows: [] },
   relayRows: [], relaySort: { key: "first", desc: true },
   exchangeRows: [], exchangeSel: null,
   activity: null,
@@ -657,7 +723,8 @@ async function loadFiles(list) {
   S.event = S.peer = S.returnToPeer = null;
   S.hidden.tl.clear(); S.hidden.tl2.clear();
   S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
-  S.seqPeers = []; S.seqOffset = 0; S.seqSelected = null;
+  S.seq = { peers: [], offset: 0, selected: null, rows: [] };
+  S.peerSeq = { peers: [], offset: 0, selected: null, rows: [] };
   S.relayRows = []; S.relaySort = { key: "first", desc: true };
   S.exchangeRows = []; S.exchangeSel = null;
   S.activity = null;
@@ -738,7 +805,9 @@ function render(seconds) {
   renderPeers();
   resetEvents();
   drawBoth();
-  showTab(S.tab);
+  // A newly loaded archive replaces whatever route was showing rather than
+  // stacking one: there is nothing behind it to go back to.
+  replaceRoute({ tab: "overview" });
 }
 
 function renderBar() {
@@ -889,7 +958,7 @@ const PITCH = 5;
  * chosen from the pixel width rather than asking for more columns than the chart
  * can actually draw.
  */
-function drawChart(id, fetch, hidden, colorFor, onModel) {
+function drawChart(id, fetch, hidden, colorFor, onModel, overlay) {
   const canvas = $(id);
   const width = canvas.parentElement.clientWidth;
   if (!width) return;                              // hidden tab: nothing to size to
@@ -971,7 +1040,11 @@ function drawChart(id, fetch, hidden, colorFor, onModel) {
                  x(i) + (t === 0 ? 0 : bw / 2), height - 6);
   }
 
-  if (id === 'tl' && S.filter.timeFrom !== null && S.filter.timeTo !== null) {
+  // Anything a particular chart wants on top of its bars, drawn after them
+  // and before the brush overlay.
+  overlay?.(ctx, model, { x, y, pad, pw, ph, bw });
+
+  if (id === "tl" && S.filter.timeFrom !== null && S.filter.timeTo !== null) {
     const idx = (ms) => (Number(ms) - Number(model.startMs)) / Number(model.binMs);
     const x0 = x(Math.max(0, idx(S.filter.timeFrom)));
     const x1 = x(Math.min(model.count, idx(S.filter.timeTo)));
@@ -1055,7 +1128,7 @@ function chartInteraction(canvasId, tipId, brushable) {
 
     const rows = m.names
       .map((name, s) => ({ name, s, v: m.series[s][i] }))
-      .filter((r) => r.v > 0 && !(canvasId === 'tl' ? S.hidden.tl : S.hidden.tl2).has(r.name));
+      .filter((r) => r.v > 0 && !(S.hidden[canvasId] ?? new Set()).has(r.name));
 
     tip.replaceChildren(el('div', 't', utc(timeAt(i), false)));
     if (!rows.length) {
@@ -1161,132 +1234,164 @@ function paintPeers() {
               td(utc(p.firstSeen, false), 'm'), td(dur(p.durationMs), 'n'),
               td(num(p.messagesIn), 'n'), td(num(p.messagesOut), 'n'),
               td(bytes(p.bytesIn), 'n'), td(bytes(p.bytesOut), 'n'));
-    tr.addEventListener('click', () => selectPeer(p.peerId));
+    tr.addEventListener('click', () => openPeer(p.peerId));
     tbody.append(tr);
   }
   $('tpeers').replaceChildren(thead, tbody);
 }
 
-function selectPeer(peerId) {
+const sub = (text) => { const h = el('div', 'h'); h.append(el('span', null, text)); return h; };
+const wrap = (table) => { const d = el('div', 'scroll'); d.style.maxHeight = '30vh'; d.append(table); return d; };
+
+/* ------------------------------------------------------------- peer page */
+
+/**
+ * Everything known about one peer, on a page of its own.
+ *
+ * Its timeline is scoped to the peer's own lifetime rather than the archive's,
+ * so a peer that was connected for five minutes of a three-hour capture is a
+ * readable chart instead of a sliver.
+ */
+function renderPeerPage(peerId) {
+  if (!S.session || S.dead) return;
   S.peer = peerId;
-  paintPeers();
+  $('peer-title').textContent = `peer ${peerId}`;
+
   const d = callJson('peerDetail', peerId);
-  const panel = $('pdetail');
-  const head = el('div', 'h');
-  head.append(el('span', null, `Peer ${peerId}`));
-  panel.replaceChildren(head);
-  if (!d || !d.found) {
-    panel.append(el('div', 'body dim', 'Not in this archive.'));
+  const missing = $('peer-missing');
+  missing.replaceChildren();
+  const found = d && d.found;
+  for (const id of ['peer-stats', 'ptl', 'pcmd', 'plife', 'prelay']) $(id).replaceChildren?.();
+  if (!found) {
+    missing.append(note('That peer is not in this archive.',
+      'Peer ids are assigned by Bitcoin Core and are unique only within one node run, so an id '
+      + 'from one archive need not appear in another.'));
+    $('peer-title').textContent = `peer ${peerId}`;
+    $('pseq-note').replaceChildren();
+    $('pseq').replaceChildren();
     return;
   }
 
-  const body = el('div', 'body');
-  const facts = el('table');
-  for (const [k, v] of [
-    ['address', d.addr ?? 'not seen'], ['type', d.connType ?? 'unknown'],
-    ['network', d.network ?? 'unknown'],
-    ['first seen', utc(d.firstSeen)], ['last seen', utc(d.lastSeen)],
-    ['seen for', dur(d.durationMs)],
-    ['messages', `${num(d.messagesIn)} in / ${num(d.messagesOut)} out`],
-    ['bytes', `${bytes(d.bytesIn)} in / ${bytes(d.bytesOut)} out`],
-  ]) {
-    const tr = el('tr');
-    tr.append(td(k, 'dim'), td(String(v), 'm'));
-    facts.append(tr);
+  $('peer-title').textContent = `peer ${peerId}   ${d.addr ?? ''}`;
+  $('peer-stats').replaceChildren(...[
+    ['connection', d.connType ?? 'unknown', d.network ? `network ${d.network}` : ''],
+    ['seen for', dur(d.durationMs), `from ${utc(d.firstSeen, false)}`],
+    ['messages', num(d.messagesIn + d.messagesOut),
+      `${num(d.messagesIn)} in / ${num(d.messagesOut)} out`],
+    ['bytes', bytes(d.bytesIn + d.bytesOut),
+      `${bytes(d.bytesIn)} in / ${bytes(d.bytesOut)} out`],
+    ['connection events', num(d.lifecycleTotal), ''],
+  ].map(([k, v, extra]) => {
+    const kv = el('div', 'kv');
+    kv.append(el('div', 'k', k));
+    const value = el('div', 'v', v);
+    if (extra) value.append(el('small', null, extra));
+    kv.append(value);
+    return kv;
+  }));
+
+  drawPeerTimeline(peerId);
+  renderPeerCommands(d);
+  renderPeerLifecycle(d);
+  renderPeerRelay(d);
+
+  // The diagram opens on this peer and stays on it: this page is about one
+  // conversation, and the Sequence tab is where several are compared.
+  if (S.peerSeq.peers[0] !== peerId) {
+    S.peerSeq = { peers: [peerId], offset: 0, selected: null, rows: [] };
+    $('pseq-insp').replaceChildren(sub('Message'),
+      el('div', 'body dim', 'Select a message in the diagram to decode it.'));
   }
-  body.append(facts);
-
-  const actions = el('div');
-  actions.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:10px';
-
-  const jump = el('button', 'b', 'Events →');
-  jump.title = 'Show only this peer’s events in the events table';
-  jump.addEventListener('click', () => {
-    S.filter.peerIds = [peerId];
-    S.returnToPeer = peerId;
-    chips();
-    refreshEvents();
-    showTab('events');
-  });
-
-  const seqJump = el('button', 'b', 'Sequence →');
-  seqJump.title = 'Draw this peer’s message exchange as a sequence diagram';
-  seqJump.addEventListener('click', () => {
-    // Replace the selection rather than adding to it: coming from one peer,
-    // that peer is the conversation you want to see.
-    S.seqPeers = [peerId];
-    S.seqOffset = 0;
-    S.seqSelected = null;
-    S.returnToPeer = peerId;
-    showTab('sequence');
-  });
-
-  actions.append(jump, seqJump);
-  body.append(actions);
-  panel.append(body);
-
-  if (d.commands.length) {
-    panel.append(sub('Messages by command'));
-    const table = el('table');
-    const thead = el('thead');
-    const hr = el('tr');
-    for (const [l, c] of [['command', ''], ['in', 'n'], ['out', 'n'], ['bytes', 'n']]) hr.append(el('th', c, l));
-    thead.append(hr);
-    const tbody = el('tbody');
-    for (const c of d.commands) {
-      const tr = el('tr');
-      tr.append(td(c.command, 'm'), td(num(c.inbound), 'n'), td(num(c.outbound), 'n'),
-                td(bytes(c.inboundBytes + c.outboundBytes), 'n'));
-      tbody.append(tr);
-    }
-    table.append(thead, tbody);
-    panel.append(wrap(table));
-  }
-
-  if (d.relay) {
-    panel.append(sub('Transaction relay'));
-    const table = el('table');
-    const tbody = el('tbody');
-    const rows = [
-      ['first to announce', `${num(d.relay.first)} of ${num(d.relay.first + d.relay.late)}`
-        + (d.relay.winRatio == null ? '' : ` (${(d.relay.winRatio * 100).toFixed(1)}%)`)],
-      ['median lag when behind', d.relay.lagP50Ms == null ? '—' : dur(d.relay.lagP50Ms)],
-      ['transactions delivered', num(d.relay.delivered)],
-      ['already held', d.relay.duplicate
-        ? `${num(d.relay.duplicate)}, ${bytes(d.relay.duplicateBytes)} wasted`
-        : 'none'],
-    ];
-    for (const [k, v] of rows) {
-      const tr = el('tr');
-      tr.append(td(k, 'dim'), td(v, 'm'));
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    panel.append(wrap(table));
-  }
-
-  if (d.lifecycle.length) {
-    const shown = d.lifecycleTotal > d.lifecycle.length
-      ? `Connection lifecycle (last ${d.lifecycle.length} of ${num(d.lifecycleTotal)})`
-      : `Connection lifecycle (${num(d.lifecycleTotal)})`;
-    panel.append(sub(shown));
-    const table = el('table');
-    const tbody = el('tbody');
-    for (const e of d.lifecycle) {
-      const extra = e.message ? e.message
-        : e.lifetimeMs != null ? `lived ${dur(e.lifetimeMs)}`
-        : e.existingConnections != null ? `${num(e.existingConnections)} existing` : '';
-      const tr = el('tr');
-      tr.append(td(utc(e.timestamp, false), 'm dim'), td(e.kind, 'm'), td(extra, 'dim'));
-      tbody.append(tr);
-    }
-    table.append(tbody);
-    panel.append(wrap(table));
-  }
+  drawSequence(SEQ_PEER);
 }
 
-const sub = (text) => { const h = el('div', 'h'); h.append(el('span', null, text)); return h; };
-const wrap = (table) => { const d = el('div', 'scroll'); d.style.maxHeight = '30vh'; d.append(table); return d; };
+function drawPeerTimeline(peerId) {
+  drawChart('ptl', (bins) => callJson('peerTimeline', peerId, bins), S.hidden.ptl,
+    (i) => color(i),
+    (m) => {
+      $('ptl-meta').textContent = m.count
+        ? `${m.count} bins of ${dur(m.binMs)}${m.partial ? ', retained events only' : ''}`
+        : '';
+      legend('ptl-legend', m, S.hidden.ptl, (i) => color(i), () => drawPeerTimeline(peerId));
+    },
+    // Connection events as full-height ticks, the same reading as on the
+    // activity chart: a boundary in the conversation, not more traffic.
+    (ctx, m, g) => {
+      for (const mark of m.marks ?? []) {
+        ctx.fillStyle = markColour(mark.kind);
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(Math.round(g.x(mark.bin)), g.pad.top, 1, g.ph);
+        ctx.globalAlpha = 1;
+      }
+    });
+}
+
+
+function renderPeerCommands(d) {
+  const table = $('pcmd');
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [l, c] of [['command', ''], ['in', 'n'], ['out', 'n'],
+                        ['bytes in', 'n'], ['bytes out', 'n']]) {
+    hr.append(el('th', c, l));
+  }
+  thead.append(hr);
+  const tbody = el('tbody');
+  for (const c of d.commands) {
+    const tr = el('tr');
+    tr.append(td(c.command, 'm'), td(num(c.inbound), 'n'), td(num(c.outbound), 'n'),
+              td(bytes(c.inboundBytes), 'n'), td(bytes(c.outboundBytes), 'n'));
+    tbody.append(tr);
+  }
+  table.replaceChildren(thead, tbody);
+}
+
+function renderPeerLifecycle(d) {
+  $('plife-head').textContent = d.lifecycleTotal > d.lifecycle.length
+    ? `Connection lifecycle (last ${d.lifecycle.length} of ${num(d.lifecycleTotal)})`
+    : `Connection lifecycle (${num(d.lifecycleTotal)})`;
+  const tbody = el('tbody');
+  for (const e of d.lifecycle) {
+    const extra = e.message ? e.message
+      : e.lifetimeMs != null ? `lived ${dur(e.lifetimeMs)}`
+      : e.existingConnections != null ? `${num(e.existingConnections)} existing` : '';
+    const tr = el('tr');
+    tr.append(td(utc(e.timestamp, false), 'm dim'), td(e.kind, 'm'), td(extra, 'dim'));
+    tbody.append(tr);
+  }
+  if (!d.lifecycle.length) {
+    const tr = el('tr');
+    tr.append(td('no connection events for this peer', 'dim'));
+    tbody.append(tr);
+  }
+  $('plife').replaceChildren(tbody);
+}
+
+function renderPeerRelay(d) {
+  const box = $('prelay');
+  box.replaceChildren();
+  if (!d.relay) {
+    box.append(el('div', 'dim', 'This peer neither announced nor delivered a transaction.'));
+    return;
+  }
+  const table = el('table');
+  const tbody = el('tbody');
+  for (const [k, v] of [
+    ['first to announce', `${num(d.relay.first)} of ${num(d.relay.first + d.relay.late)}`
+      + (d.relay.winRatio == null ? '' : ` (${(d.relay.winRatio * 100).toFixed(1)}%)`)],
+    ['median lag when behind', d.relay.lagP50Ms == null ? 'never behind' : dur(d.relay.lagP50Ms)],
+    ['transactions delivered', num(d.relay.delivered)],
+    ['already held', d.relay.duplicate
+      ? `${num(d.relay.duplicate)}, ${bytes(d.relay.duplicateBytes)} wasted`
+      : 'none'],
+  ]) {
+    const tr = el('tr');
+    tr.append(td(k, 'dim'), td(v, 'm'));
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  box.append(table);
+}
 
 /* --------------------------------------------------------------- networks */
 
@@ -1455,10 +1560,7 @@ function selectNetwork(r) {
     for (const p of peers.rows) {
       const tr = el('tr');
       tr.append(td(String(p.peerId), 'n'), td(p.addr ?? '—', 'm'), td(num(p.events), 'n'));
-      tr.addEventListener('click', () => {
-        showPeerMode('peers');
-        selectPeer(p.peerId);
-      });
+      tr.addEventListener("click", () => openPeer(p.peerId));
       tbody.append(tr);
     }
     table.append(tbody);
@@ -1478,19 +1580,23 @@ function showPeerMode(mode) {
   S.peer = null;
   syncModeButtons();
   $('psearch').value = '';
-  const panel = $('pdetail');
-  const head = el('div', 'h');
-  head.append(el('span', null, mode === 'peers' ? 'Peer detail' : 'Network detail'));
-  panel.replaceChildren(head, el('div', 'body dim',
-    mode === 'peers' ? 'Select a peer for its message mix and connection lifecycle.'
-                     : 'Select a network for its peers and connection behaviour.'));
-  if (mode === 'peers') {
+  // A peer now has a page of its own, so the side panel is only needed for the
+  // network detail; in peer mode the table takes the whole width.
+  const networks = mode === 'networks';
+  $('pdetail').hidden = !networks;
+  $('peerwrap').classList.toggle('solo', !networks);
+  if (networks) {
+    const head = el('div', 'h');
+    head.append(el('span', null, 'Network detail'));
+    $('pdetail').replaceChildren(head, el('div', 'body dim',
+      'Select a network for its peers and connection behaviour.'));
+    showNetworks();
+  } else {
     renderNetNote();
     renderPeers();
-  } else {
-    showNetworks();
   }
 }
+
 
 /* ----------------------------------------------------------------- events */
 const ROW_H = 22;
@@ -1536,26 +1642,22 @@ function chips() {
 }
 
 /**
- * The way back to the peer you arrived from. Rendered on both the events and
- * sequence tabs, since either can be opened from a peer's detail pane.
+ * The way back to where you came from.
+ *
+ * Navigation is real browser history now, so this is the browser's own Back --
+ * the button exists because the events and sequence tabs are reached from a
+ * peer page and the way home should be visible, not because the app tracks it.
  */
 function renderBack(elementId) {
   const box = $(elementId);
   box.replaceChildren();
   if (S.returnToPeer === null) return;
   const b = el('button', 'b', `← peer ${S.returnToPeer}`);
-  b.title = 'Back to this peer in the peer list';
-  b.addEventListener('click', () => {
-    const peer = S.returnToPeer;
-    S.returnToPeer = null;
-    renderBack('eback');
-    renderBack('seq-back');
-    showPeerMode('peers');
-    showTab('peers');
-    selectPeer(peer);
-  });
+  b.title = 'Back to that peer';
+  b.addEventListener('click', () => history.back());
   box.append(b);
 }
+
 
 function chip(label, onRemove) {
   const n = el('span', 'fchip');
@@ -2034,7 +2136,7 @@ function paintRelay() {
       td(num(p.duplicate), 'n'),
       td(p.duplicateBytes ? bytes(p.duplicateBytes) : '—', 'n'),
     );
-    tr.addEventListener('click', () => { showTab('peers'); selectPeer(p.peerId); });
+    tr.addEventListener('click', () => openPeer(p.peerId));
     tbody.append(tr);
   }
   $('trelay').replaceChildren(thead, tbody);
@@ -2167,7 +2269,28 @@ function renderExchangeLatency() {
 
 /* ------------------------------------------------------- sequence diagram */
 
+/**
+ * The diagram is drawn in two places -- its own tab, where several peers can be
+ * compared, and a single peer's page -- so everything it touches comes from an
+ * instance rather than from fixed ids. `state` holds which peers are on it,
+ * where in the archive it is paged to, and which row is selected.
+ */
+const SEQ_TAB = {
+  svg: 'seq', scroll: 'seq-scroll', note: 'seq-note', pos: 'seq-pos',
+  prev: 'seq-prev', next: 'seq-next', limit: 'seq-limit', ties: 'seq-ties',
+  insp: "seq-insp", state: () => S.seq,
+  // Only the tab has a picker to add lifelines back, so only the tab lets you
+  // take one away.
+  removable: true,
+};
+const SEQ_PEER = {
+  svg: 'pseq', scroll: 'pseq-scroll', note: 'pseq-note', pos: 'pseq-pos',
+  prev: 'pseq-prev', next: 'pseq-next', limit: 'pseq-limit', ties: 'pseq-ties',
+  insp: "pseq-insp", state: () => S.peerSeq, maxHeight: "56vh",
+};
+
 const SEQ = { row: 24, top: 54, gutter: 168, lane: 250, pad: 24, tie: 9, tieDepth: 6 };
+
 const SVGNS = 'http://www.w3.org/2000/svg';
 const svg = (tag, attrs = {}) => {
   const n = document.createElementNS(SVGNS, tag);
@@ -2175,14 +2298,15 @@ const svg = (tag, attrs = {}) => {
   return n;
 };
 
-function seqLimit() {
-  return Number($('seq-limit').value);
+function seqLimit(view) {
+  return Number($(view.limit).value);
 }
 
 /**
  * Rebuild the peer picker from the peers actually in the archive, busiest first.
  * A sequence diagram is only legible for a handful of lifelines, so peers are
- * added explicitly rather than all at once.
+ * added explicitly rather than all at once. Only the tab has a picker; a peer's
+ * own page is fixed to that peer.
  */
 function buildSeqPicker() {
   const select = $('seq-add');
@@ -2193,23 +2317,25 @@ function buildSeqPicker() {
     select.append(new Option(`${p.peerId}  ${p.addr ?? ""}  (${num(p.events)})`, String(p.peerId)));
   }
   // Start on the busiest peer so the tab is never empty on arrival.
-  if (!S.seqPeers.length && busiest.length) S.seqPeers = [busiest[0].peerId];
+  if (!S.seq.peers.length && busiest.length) S.seq.peers = [busiest[0].peerId];
 }
 
 function seqAddPeer(peerId) {
-  if (S.seqPeers.includes(peerId)) return;
+  if (S.seq.peers.includes(peerId)) return;
   // Beyond a handful of lifelines the diagram stops being readable.
-  if (S.seqPeers.length >= 6) S.seqPeers.shift();
-  S.seqPeers.push(peerId);
-  S.seqOffset = 0;
-  drawSequence();
+  if (S.seq.peers.length >= 6) S.seq.peers.shift();
+  S.seq.peers.push(peerId);
+  S.seq.offset = 0;
+  drawSequence(SEQ_TAB);
 }
 
-function seqRemovePeer(peerId) {
-  S.seqPeers = S.seqPeers.filter((p) => p !== peerId);
-  S.seqOffset = 0;
-  drawSequence();
+function seqRemovePeer(view, peerId) {
+  const state = view.state();
+  state.peers = state.peers.filter((p) => p !== peerId);
+  state.offset = 0;
+  drawSequence(view);
 }
+
 
 /**
  * Collect ties into one bracket per request, and give each bracket a nesting
@@ -2243,18 +2369,18 @@ function exchangeBrackets(ties) {
   return brackets;
 }
 
-function drawSequence() {
+function drawSequence(view) {
   if (!S.session || S.dead) return;
-  renderBack('seq-back');
+  const state = view.state();
 
-  const node = $('seq');
+  const node = $(view.svg);
   node.replaceChildren();
-  const note = $('seq-note');
+  const note = $(view.note);
   note.replaceChildren();
 
-  if (!S.seqPeers.length) {
-    $('seq-pos').textContent = '';
-    note.append(el('div', 'msg info', 'Add a peer to draw its message exchange.'));
+  if (!state.peers.length) {
+    $(view.pos).textContent = "";
+    note.append(el("div", "msg info", "Add a peer to draw its message exchange."));
     return;
   }
 
@@ -2263,19 +2389,19 @@ function drawSequence() {
   const filter = {
     groups: ['message', 'connection'],
     kinds: [],
-    peerIds: S.seqPeers,
+    peerIds: state.peers,
     timeFrom: S.filter.timeFrom,
     timeTo: S.filter.timeTo,
     text: '',
   };
-  const page = callJson('sequence', JSON.stringify(filter), S.seqOffset, seqLimit());
+  const page = callJson("sequence", JSON.stringify(filter), state.offset, seqLimit(view));
   if (!page) return;
-  S.seqRows = page.rows;
+  state.rows = page.rows;
 
-  const first = page.total ? S.seqOffset + 1 : 0;
-  $('seq-pos').textContent = `${num(first)}–${num(S.seqOffset + page.rows.length)} of ${num(page.total)}`;
-  $('seq-prev').disabled = S.seqOffset === 0;
-  $('seq-next').disabled = S.seqOffset + seqLimit() >= page.total;
+  const first = page.total ? state.offset + 1 : 0;
+  $(view.pos).textContent = `${num(first)}–${num(state.offset + page.rows.length)} of ${num(page.total)}`;
+  $(view.prev).disabled = state.offset === 0;
+  $(view.next).disabled = state.offset + seqLimit(view) >= page.total;
 
   if (!page.rows.length) {
     note.append(el('div', 'msg info', 'No messages for these peers in the selected range.'));
@@ -2286,20 +2412,20 @@ function drawSequence() {
   // Exchanges are matched within the page, so a request answered on the next
   // screenful simply has no bracket. Turning them off is worth having: on a
   // busy peer nearly every row takes part in one.
-  const ties = $('seq-ties').checked ? (page.ties ?? []) : [];
+  const ties = $(view.ties).checked ? (page.ties ?? []) : [];
   const brackets = exchangeBrackets(ties);
   const tieWidth = brackets.length
     ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
     : 0;
   const gutter = SEQ.gutter + tieWidth;
 
-  const lanes = S.seqPeers;
+  const lanes = state.peers;
   const width = gutter + SEQ.lane * (lanes.length + 1) + SEQ.pad;
   const height = SEQ.top + page.rows.length * SEQ.row + SEQ.pad;
   node.setAttribute('width', width);
   node.setAttribute('height', height);
   node.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  $('seq-scroll').style.maxHeight = 'calc(100vh - 190px)';
+  $(view.scroll).style.maxHeight = view.maxHeight ?? 'calc(100vh - 190px)';
 
   const laneX = (i) => gutter + SEQ.lane * i + SEQ.lane / 2;
   const rowY = (i) => SEQ.top + i * SEQ.row + SEQ.row / 2;
@@ -2371,7 +2497,7 @@ function drawSequence() {
     }
     // Remove a lifeline from its own header, rather than from a separate list
     // of chips above the diagram. Lane 0 is this node, which cannot be removed.
-    if (i > 0) {
+    if (i > 0 && view.removable) {
       const cx = x + w / 2 - 11;
       const cy = 22;
       const rm = svg('g', { class: 'rm' });
@@ -2384,7 +2510,7 @@ function drawSequence() {
       rm.append(tip);
       rm.addEventListener('click', (event) => {
         event.stopPropagation();
-        seqRemovePeer(lanes[i - 1]);
+        seqRemovePeer(view, lanes[i - 1]);
       });
       node.append(rm);
     }
@@ -2410,7 +2536,7 @@ function drawSequence() {
   let previous = null;
   page.rows.forEach((r, i) => {
     const y = rowY(i);
-    const g = svg('g', { class: `row${S.seqSelected === r.index ? ' on' : ''}` });
+    const g = svg('g', { class: `row${state.selected === r.index ? ' on' : ''}` });
     rowEls[i] = g;
 
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
@@ -2474,9 +2600,9 @@ function drawSequence() {
     }
 
     g.addEventListener('click', () => {
-      S.seqSelected = r.index;
-      drawSequence();
-      inspectInto('seq-insp', r.index, `Message ${r.index}`);
+      state.selected = r.index;
+      drawSequence(view);
+      inspectInto(view.insp, r.index, `Message ${r.index}`);
     });
     node.append(g);
   });
@@ -2533,22 +2659,80 @@ function drawSequence() {
 }
 
 
-/* ------------------------------------------------------------------- tabs */
+/* ---------------------------------------------------------------- routing */
+
+const TABS = ['overview', 'peers', 'peer', 'events', 'sequence', 'relay', 'activity'];
+
+/**
+ * Navigation goes through the browser's own history, so Back does what Back
+ * always does. The routes only live for as long as the session does: the
+ * archive is dropped in rather than fetched, so a reloaded page has no data to
+ * show and any route in the URL is ignored on arrival.
+ */
+const hashOf = (route) =>
+  route.tab === 'peer' ? `#peer/${route.peerId}` : `#${route.tab}`;
+
+function routeOf(hash) {
+  const parts = String(hash ?? '').replace(/^#/, '').split('/');
+  if (parts[0] === 'peer') {
+    // A hand-edited or stale URL must not produce a page about peer NaN.
+    const peerId = Number(parts[1]);
+    if (parts[1] !== undefined && parts[1] !== '' && Number.isFinite(peerId)) {
+      return { tab: 'peer', peerId };
+    }
+    return { tab: 'peers' };
+  }
+  return { tab: TABS.includes(parts[0]) ? parts[0] : 'overview' };
+}
+
+
+/** Go somewhere, leaving a history entry behind. */
+function navigate(route) {
+  if (S.route && hashOf(S.route) === hashOf(route)) return;
+  history.pushState(route, '', hashOf(route));
+  showRoute(route);
+}
+
+/** Go somewhere without adding to the history, for the first view of a file. */
+function replaceRoute(route) {
+  history.replaceState(route, '', hashOf(route));
+  showRoute(route);
+}
+
 function showTab(name) {
-  S.tab = name;
+  navigate({ tab: name });
+}
+
+function openPeer(peerId) {
+  navigate({ tab: 'peer', peerId });
+}
+
+/** Show a route. Never touches history: `popstate` calls this too. */
+function showRoute(route) {
+  S.route = route;
+  S.tab = route.tab;
+  // A peer page belongs to the peer list, so that tab stays lit and Back is an
+  // obvious way home.
+  const lit = route.tab === 'peer' ? 'peers' : route.tab;
   for (const b of document.querySelectorAll('#tabs button')) {
-    b.setAttribute('aria-selected', String(b.dataset.tab === name));
+    b.setAttribute('aria-selected', String(b.dataset.tab === lit));
   }
-  for (const t of ["overview", "peers", "events", "sequence", "relay", "activity"]) {
-    $(`tab-${t}`).hidden = t !== name;
-  }
+  for (const t of TABS) $(`tab-${t}`).hidden = t !== route.tab;
+  // The "back to peer N" button on the events tab belongs to the trip that
+  // started at that peer. Leaving this tab ends the trip, and the browser's own
+  // Back takes over from here.
+  if (route.tab !== 'events') S.returnToPeer = null;
+
+
   // Canvas and SVG have no size while hidden, so they are drawn on reveal.
   if (!S.session || S.dead) return;
-  if (name === 'overview') drawBoth();
-  if (name === 'events') refreshEvents();
-  if (name === 'sequence') { buildSeqPicker(); drawSequence(); }
-  if (name === "relay") renderRelay();
-  if (name === "activity") drawActivity();
+  if (route.tab === 'overview') drawBoth();
+  if (route.tab === "peers" && S.peerMode === "peers") paintPeers();
+  if (route.tab === 'peer') renderPeerPage(route.peerId);
+  if (route.tab === 'events') refreshEvents();
+  if (route.tab === 'sequence') { buildSeqPicker(); drawSequence(SEQ_TAB); }
+  if (route.tab === 'relay') renderRelay();
+  if (route.tab === 'activity') drawActivity();
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -2624,16 +2808,44 @@ function setup() {
     e.target.value = '';
   });
   $('seq-prev').addEventListener('click', () => {
-    S.seqOffset = Math.max(0, S.seqOffset - seqLimit());
-    drawSequence();
+    S.seq.offset = Math.max(0, S.seq.offset - seqLimit(SEQ_TAB));
+    drawSequence(SEQ_TAB);
   });
   $('seq-next').addEventListener('click', () => {
-    S.seqOffset += seqLimit();
-    drawSequence();
+    S.seq.offset += seqLimit(SEQ_TAB);
+    drawSequence(SEQ_TAB);
   });
-  $('seq-limit').addEventListener('change', () => { S.seqOffset = 0; drawSequence(); });
-  $("seq-ties").addEventListener("change", drawSequence);
+  $('seq-limit').addEventListener('change', () => { S.seq.offset = 0; drawSequence(SEQ_TAB); });
+  $('seq-ties').addEventListener('change', () => drawSequence(SEQ_TAB));
+
+  $('peer-back').addEventListener('click', () => history.back());
+  $('peer-events').addEventListener('click', () => {
+    S.filter.peerIds = [S.peer];
+    S.returnToPeer = S.peer;
+    chips();
+    showTab('events');
+  });
+  $('pseq-prev').addEventListener('click', () => {
+    S.peerSeq.offset = Math.max(0, S.peerSeq.offset - seqLimit(SEQ_PEER));
+    drawSequence(SEQ_PEER);
+  });
+  $('pseq-next').addEventListener('click', () => {
+    S.peerSeq.offset += seqLimit(SEQ_PEER);
+    drawSequence(SEQ_PEER);
+  });
+  $('pseq-limit').addEventListener('change', () => {
+    S.peerSeq.offset = 0;
+    drawSequence(SEQ_PEER);
+  });
+  $('pseq-ties').addEventListener('change', () => drawSequence(SEQ_PEER));
+
+  // Back and forward are the browser's, so they must not push history again.
+  window.addEventListener('popstate', (event) => {
+    showRoute(event.state ?? routeOf(location.hash));
+  });
+
   $("rsearch").addEventListener("input", paintRelay);
+
 
   for (const [id, group] of [["asort-first", "asort"], ["asort-events", "asort"],
                              ["aw-count", "aw"], ["aw-bytes", "aw"]]) {
@@ -2649,12 +2861,13 @@ function setup() {
   $("act").addEventListener("mouseleave", () => { $("atip").hidden = true; });
   $("act").addEventListener("click", (event) => {
     const hit = activityAt(event);
-    if (hit) { showTab("peers"); selectPeer(hit.peer.peerId); }
+    if (hit) openPeer(hit.peer.peerId);
   });
 
 
   chartInteraction('tl', 'tip', true);
-  chartInteraction('tl2', 'tip2', false);
+  chartInteraction("tl2", "tip2", false);
+  chartInteraction("ptl", "ptip", false);
 
   let resizing;
   window.addEventListener('resize', () => {
@@ -2663,6 +2876,7 @@ function setup() {
       if (S.session && !S.dead && S.tab === 'overview') drawBoth();
       if (S.session && !S.dead && S.tab === "events") refreshEvents();
       if (S.session && !S.dead && S.tab === "activity") drawActivity();
+      if (S.session && !S.dead && S.tab === "peer") drawPeerTimeline(S.peer);
     }, 120);
   });
 }

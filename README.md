@@ -90,6 +90,18 @@ where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
 `cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
 a page boundary is not drawn. The toggle in the toolbar turns them off.
 
+**Peer** — a page for one peer, reached by clicking it anywhere it appears. Its
+own timeline, scoped to that peer's connection rather than to the archive, so a
+peer connected for five minutes of a three-hour capture is a readable chart
+instead of a sliver; its message mix by command; its connection lifecycle; its
+relay record; and its message sequence diagram, on the page rather than a tab
+away.
+
+Navigation is the browser's own history: opening a peer pushes an entry, and
+Back returns to the list. Routes live only as long as the session does — the
+archive is dropped in rather than fetched, so a reloaded page has nothing to
+show and any route in the URL is ignored on arrival.
+
 **Activity** — every peer at once: one row per peer, one column per pixel of
 time, a mark for the messages exchanged in each slice. Inbound sits above the
 row's line and outbound below it, shaded by how many (or by how many bytes),

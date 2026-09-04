@@ -159,6 +159,12 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// One peer's traffic over its own lifetime, inbound against outbound.
+    #[wasm_bindgen(js_name = peerTimeline)]
+    pub fn peer_timeline(&self, peer_id: f64, max_bins: u32) -> String {
+        view::peer_timeline(&self.analysis, peer_id as u64, max_bins as usize).to_string()
+    }
+
     /// A raster of per-peer activity over time: one row per peer, one column
     /// per pixel, split by direction.
     #[allow(clippy::too_many_arguments)]

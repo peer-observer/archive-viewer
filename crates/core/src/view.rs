@@ -544,6 +544,75 @@ fn relay_row(analysis: &Analysis, peer_id: u64, record: &relay::PeerRelay) -> Va
     })
 }
 
+/// One peer's traffic over its own lifetime, inbound against outbound.
+///
+/// Scoped to the peer's first and last event rather than to the archive: a peer
+/// connected for five minutes of a three-hour capture is a sliver on the shared
+/// timeline and a readable chart on its own.
+///
+/// Built by scanning the retained events, since the archive histogram is kept
+/// per kind and knows nothing about peers. That means it covers what retention
+/// kept; `partial` says when that was not everything.
+pub fn peer_timeline(analysis: &Analysis, peer_id: u64, max_bins: usize) -> Value {
+    let empty = json!({
+        "found": false, "startMs": 0, "endMs": 0, "binMs": 1, "count": 0,
+        "series": [[], []], "names": ["inbound", "outbound"], "marks": [],
+        "partial": false,
+    });
+    let Some(peer) = analysis.peers.get(peer_id) else {
+        return empty;
+    };
+
+    let start = peer.first_seen;
+    // A peer seen at a single instant still needs a bin to live in.
+    let span = peer.duration_ms().max(1);
+    let bins = max_bins.clamp(1, 4096).min(span as usize).max(1);
+    let bin_ms = span.div_ceil(bins as u64).max(1);
+    let count = (span.div_ceil(bin_ms) as usize).clamp(1, bins);
+
+    let mut inbound = vec![0u64; count];
+    let mut outbound = vec![0u64; count];
+    let timestamps = analysis.store.timestamps();
+    let peers = analysis.store.peers();
+    let flags = analysis.store.flags();
+    for i in 0..timestamps.len() {
+        if peers[i] != peer.index || flags[i] & crate::store::flags::HAS_DIRECTION == 0 {
+            continue;
+        }
+        let bin = (((timestamps[i].saturating_sub(start)) / bin_ms) as usize).min(count - 1);
+        if flags[i] & crate::store::flags::INBOUND != 0 {
+            inbound[bin] += 1;
+        } else {
+            outbound[bin] += 1;
+        }
+    }
+
+    let marks: Vec<Value> = peer
+        .lifecycle
+        .iter()
+        .map(|e| {
+            json!({
+                "bin": ((e.timestamp.saturating_sub(start) / bin_ms) as usize).min(count - 1),
+                "kind": e.kind.as_str(),
+                "timestamp": e.timestamp,
+            })
+        })
+        .collect();
+
+    json!({
+        "found": true,
+        "startMs": start,
+        "endMs": peer.last_seen,
+        "binMs": bin_ms,
+        "count": count,
+        "series": [inbound, outbound],
+        "names": ["inbound", "outbound"],
+        "marks": marks,
+        "marksComplete": peer.lifecycle_total as usize <= peer.lifecycle.len(),
+        "partial": analysis.store.is_full(),
+    })
+}
+
 /// A raster of per-peer activity over time: one row per peer, one column per
 /// pixel, split by direction.
 ///

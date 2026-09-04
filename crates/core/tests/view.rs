@@ -2,7 +2,7 @@ mod support;
 
 use archive_viewer_core::analysis::Analysis;
 use archive_viewer_core::view::{self, Filter, QueryCache};
-use serde_json::Value;
+use serde_json::{json, Value};
 use support::*;
 
 const BUDGET: u64 = 64 * 1024 * 1024;
@@ -880,4 +880,68 @@ fn peer_activity_of_an_empty_analysis_is_well_formed() {
     assert_eq!(page["shown"], 0);
     assert_eq!(page["rows"].as_array().unwrap().len(), 0);
     assert_eq!(page["max"], 0);
+}
+
+#[test]
+fn a_peer_timeline_is_scoped_to_that_peers_own_lifetime() {
+    let analysis = activity_archive();
+
+    // Peer 2 only appears in the second half of the archive, and its chart
+    // starts where it does rather than where the archive does.
+    let page = view::peer_timeline(&analysis, 2, 20);
+    assert_eq!(page["found"], true);
+    assert_eq!(page["startMs"], 3_000);
+    assert_eq!(page["endMs"], 3_900);
+    assert_eq!(page["names"], json!(["inbound", "outbound"]));
+
+    // Every message this peer exchanged is in a bin, and only its own.
+    let series = page["series"].as_array().unwrap();
+    let total = |s: &Value| -> u64 {
+        s.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .sum()
+    };
+    assert_eq!(total(&series[0]), 10, "peer 2 received ten messages");
+    assert_eq!(total(&series[1]), 0, "and sent none");
+    let count = page["count"].as_u64().unwrap() as usize;
+    assert_eq!(series[0].as_array().unwrap().len(), count);
+    assert_eq!(series[1].as_array().unwrap().len(), count);
+
+    // Peer 1's own chart holds its own traffic, plus its connection event.
+    let one = view::peer_timeline(&analysis, 1, 20);
+    assert_eq!(one["startMs"], 1_000);
+    let series = one["series"].as_array().unwrap();
+    assert_eq!(total(&series[0]), 20);
+    assert_eq!(total(&series[1]), 20);
+    let marks = one["marks"].as_array().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["kind"], "inbound");
+    assert!(marks[0]["bin"].as_u64().unwrap() < one["count"].as_u64().unwrap());
+}
+
+#[test]
+fn a_peer_timeline_survives_a_peer_seen_once() {
+    // A peer with a single event has no duration to divide into bins.
+    let events = vec![message_event(5_000, 42, "ping", true, 32)];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("one.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let page = view::peer_timeline(&analysis, 42, 100);
+    assert_eq!(page["found"], true);
+    assert_eq!(page["count"], 1);
+    assert!(
+        page["binMs"].as_u64().unwrap() >= 1,
+        "never a zero-width bin"
+    );
+    assert_eq!(page["series"][0], json!([1]));
+
+    // A peer that is not in the archive is reported as such, not as empty data.
+    let missing = view::peer_timeline(&analysis, 999, 100);
+    assert_eq!(missing["found"], false);
+    assert_eq!(missing["count"], 0);
 }
