@@ -97,12 +97,13 @@ The actors stay put while the messages scroll under them: the diagram is two
 SVGs stacked in one scroller, a sticky one holding the column headings and the
 actor boxes, and a tall one holding the messages. They share a width, so
 scrolling sideways keeps the lanes lined up without anything having to
-synchronise them. The panel sits second on the page, under the traffic chart and
-above the tables, and the scroller takes whatever height the window has left
-rather than a fixed slice of it -- so on a 1080 px screen the diagram gets 930 px
-instead of 756. The lanes are sized from the panel too: with only two of them and
-nothing left in the margin but a timestamp, the diagram fills the space it has --
-394 px lanes in a 900 px panel where it used to draw 250 and leave the rest empty.
+synchronise them. The panel sits second on the page, under the raster the range
+is dragged on and above the tables, and the scroller takes whatever height the
+window has left rather than a fixed slice of it -- so on a 1080 px screen the
+diagram gets 930 px instead of 756. The lanes are sized from the panel too:
+with only two of them and nothing left in the margin but a timestamp, the
+diagram fills the space it has -- 394 px lanes in a 900 px panel where it used
+to draw 250 and leave the rest empty.
 
 
 This is peer-observer issue #397, done in the browser rather than by exporting to
@@ -140,11 +141,34 @@ where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
 a page boundary is not drawn. The toggle in the toolbar turns them off.
 
 **Peer** — a page for one peer, reached by clicking it anywhere it appears. Its
-own timeline, scoped to that peer's connection rather than to the archive, so a
-peer connected for five minutes of a three-hour capture is a readable chart
-instead of a sliver; then its message sequence diagram, which is what the page
-is for and gets the room to say so; then its message mix by command, its
-connection lifecycle and its relay record.
+own conversation as a raster, then its message sequence diagram, which is what
+the page is for and gets the room to say so, then its message mix by command,
+its connection lifecycle and its relay record.
+
+The raster is the same idea as the **Activity** chart below, one level down: a
+row per *command* rather than per peer, a column per pixel of that connection's
+own lifetime, inbound above each row's line and outbound below it. The all-peers
+chart has room for a row per peer and puts the count in the shade; this one has
+a page to itself, so it spends the room on the command rows and puts the count
+in the height of the mark. That is the whole reason for it — the rhythm of a
+connection is in *which* commands fire *when*, a `ping` every two minutes, an
+`inv` answered by a `getdata` answered by a `tx`, a burst of handshake at the
+start, and a stack of totals by direction cannot show any of it. On the sample
+archive a peer runs to eight commands at the median and thirteen at the most,
+which is a chart 158 px tall where the stack of totals it replaces was a fixed
+170. It is scoped to the peer's own first and last event rather than to the
+archive, so a peer connected for five minutes of a three-hour capture is a
+readable chart instead of a sliver.
+
+Drag across it and the sequence diagram below is scoped to that stretch of time;
+click it, or the button in the panel head, and it goes back to the whole
+connection. The chart itself always shows the whole connection, because a
+selector that hides what you are selecting from cannot be adjusted. The range is
+in milliseconds rather than in columns, so it survives a resize, and the column
+edges round outwards, so a mark is never half-selected — the diagram holds
+exactly what the band drew in 59 of 60 measured cases and that plus a message or
+two in the last. If a range is also brushed on the overview timeline, the two
+are constraints rather than modes: the narrower wins on each end.
 
 Navigation is the browser's own history: opening a peer pushes an entry, and
 Back returns to the list. Routes live only as long as the session does — the

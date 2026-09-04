@@ -171,10 +171,17 @@ impl Session {
         view::connection_durations(&self.analysis, ending).to_string()
     }
 
-    /// One peer's traffic over its own lifetime, inbound against outbound.
-    #[wasm_bindgen(js_name = peerTimeline)]
-    pub fn peer_timeline(&self, peer_id: f64, max_bins: u32) -> String {
-        view::peer_timeline(&self.analysis, peer_id as u64, max_bins as usize).to_string()
+    /// One peer's conversation as a raster: a row per command, a column per
+    /// pixel of time, split by direction.
+    #[wasm_bindgen(js_name = peerRaster)]
+    pub fn peer_raster(&self, peer_id: f64, columns: u32, rows: u32) -> String {
+        view::peer_raster(
+            &self.analysis,
+            peer_id.max(0.0) as u64,
+            columns as usize,
+            rows as usize,
+        )
+        .to_string()
     }
 
     /// A raster of per-peer activity over time: one row per peer, one column

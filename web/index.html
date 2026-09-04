@@ -167,15 +167,18 @@ canvas { display: block; width: 100%; }
    That attribute is the canvas backing store, and drawing scales it by the
    device pixel ratio -- so a chart that read its own attribute back would grow
    by that ratio on every redraw, which on a retina display means doubling on
-   every frame of a brush drag. CSS owns the box; the script owns the pixels. */
+   every frame of a brush drag. CSS owns the box; the script owns the pixels.
+   The rasters have a row count rather than a fixed height, so they set
+   `style.height` -- still CSS, still never the attribute. */
 #tl { height: 200px; }
 #tl2 { height: 180px; }
-#ptl { height: 170px; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 3px 16px; padding: 8px 10px 0; }
 .legend .it { color: var(--ink-2); white-space: nowrap; cursor: pointer; font-size: 12px; }
 .legend .it b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 .legend .it.off { opacity: .35; }
+/* A legend that only names things, with nothing to toggle. */
+.legend .it.static { cursor: default; }
 #tip, #tip2, #atip, #ptip {
   position: absolute; pointer-events: none; z-index: 20;
   background: var(--panel); border: 1px solid var(--rule-2); border-radius: 3px;
@@ -412,9 +415,15 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
 
       <div class="p mb">
         <div class="h"><span>Traffic over this connection</span><span class="sp"></span>
+          <button class="b" id="ptl-clear" hidden></button>
           <span class="dim" id="ptl-meta"></span></div>
         <div class="chart"><canvas id="ptl"></canvas><div id="ptip" hidden></div></div>
         <div class="legend" id="ptl-legend"></div>
+        <div class="dim" style="padding:2px 10px 8px;font-size:12px">
+          One row per command, one column per pixel of this connection; mark height is how many
+          messages fell in that slice. Drag across it to scope the sequence diagram below to a
+          stretch of time, and click it to go back to the whole connection.
+        </div>
       </div>
 
       <div class="p mb">
@@ -681,7 +690,7 @@ const S = {
   session: null, dead: false,
   summary: null,
   charts: {},                       // canvas id -> last drawn model
-  hidden: { tl: new Set(), tl2: new Set(), ptl: new Set() },
+  hidden: { tl: new Set(), tl2: new Set() },
   group: null,                      // group shown in the rate-by-type chart
   filter: { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' },
   event: null, peer: null, route: null,
@@ -692,6 +701,8 @@ const S = {
   relayRows: [], relaySort: { key: "first", desc: true },
   exchangeRows: [], exchangeSel: null,
   activity: null,
+  raster: null,                     // the peer page's own chart, for its tooltip
+  peerRange: null,                  // a range dragged on it, scoping the diagram below
 };
 
 /**
@@ -1140,6 +1151,14 @@ function drawChart(id, fetch, hidden, colorFor, onModel, overlay) {
   }
 }
 
+/** Wipe a canvas, leaving the box the stylesheet gave it alone. */
+function blankCanvas(id) {
+  const canvas = $(id);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
 const compact = (v) => v >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
   : v >= 1e3 ? `${(v / 1e3).toFixed(v >= 1e4 ? 0 : 1)}k` : String(Math.round(v));
 
@@ -1328,6 +1347,8 @@ const wrap = (table) => { const d = el('div', 'scroll'); d.style.maxHeight = '30
  */
 function renderPeerPage(peerId) {
   if (!S.session || S.dead) return;
+  // A range dragged on one peer's chart says nothing about another's.
+  if (S.peer !== peerId) clearPeerRange({ redraw: false });
   S.peer = peerId;
   $('peer-title').textContent = `peer ${peerId}`;
 
@@ -1335,8 +1356,11 @@ function renderPeerPage(peerId) {
   const missing = $('peer-missing');
   missing.replaceChildren();
   const found = d && d.found;
-  for (const id of ['peer-stats', 'ptl', 'pcmd', 'plife', 'prelay']) $(id).replaceChildren?.();
+  for (const id of ['peer-stats', 'pcmd', 'plife', 'prelay', 'ptl-legend']) $(id).replaceChildren();
   if (!found) {
+    blankCanvas('ptl');
+    S.raster = null;
+    $('ptl-meta').textContent = '';
     missing.append(note('That peer is not in this archive.',
       'Peer ids are assigned by Bitcoin Core and are unique only within one node run, so an id '
       + 'from one archive need not appear in another.'));
@@ -1358,7 +1382,7 @@ function renderPeerPage(peerId) {
     ['connection events', num(d.lifecycleTotal), ''],
   ]);
 
-  drawPeerTimeline(peerId);
+  drawPeerRaster(peerId);
   renderPeerCommands(d);
   renderPeerLifecycle(d);
   renderPeerRelay(d);
@@ -1392,25 +1416,328 @@ function userAgentNote(d) {
   return 'no version message or getpeerinfo poll';
 }
 
-function drawPeerTimeline(peerId) {
-  drawChart('ptl', (bins) => callJson('peerTimeline', peerId, bins), S.hidden.ptl,
-    (i) => color(i),
-    (m) => {
-      $('ptl-meta').textContent = m.count
-        ? `${m.count} bins of ${dur(m.binMs)}${m.partial ? ', retained events only' : ''}`
-        : '';
-      legend('ptl-legend', m, S.hidden.ptl, (i) => color(i), () => drawPeerTimeline(peerId));
-    },
-    // Connection events as full-height ticks, the same reading as on the
-    // activity chart: a boundary in the conversation, not more traffic.
-    (ctx, m, g) => {
-      for (const mark of m.marks ?? []) {
-        ctx.fillStyle = markColour(mark.kind);
-        ctx.globalAlpha = 0.85;
-        ctx.fillRect(Math.round(g.x(mark.bin)), g.pad.top, 1, g.ph);
-        ctx.globalAlpha = 1;
+/**
+ * The peer's own conversation as a raster: one row per command, one column per
+ * pixel of that connection's lifetime, inbound above each row's midline and
+ * outbound below it.
+ *
+ * The all-peers chart on the Activity tab has room for a row per peer and shades
+ * a fixed lane by count. This one has a page to itself, so it spends the room on
+ * a row per command and on a size channel: the rhythm of a connection is in
+ * *which* commands fire *when* -- a `ping` every two minutes, an `inv` answered
+ * by a `getdata` answered by a `tx`, a burst of handshake at the start -- and a
+ * stack of totals by direction cannot show any of it.
+ */
+const PRAS = {
+  row: 16, lane: 6, gap: 1, labels: 96, top: 8, bottom: 22, right: 8, maxRows: 14,
+};
+
+/** Fetch this peer's raster and draw it. */
+function drawPeerRaster(peerId) {
+  if (!S.session || S.dead) return;
+  const width = $('ptl').parentElement.clientWidth;
+  if (!width) return;                             // hidden tab: nothing to size to
+
+  const columns = Math.max(1, Math.floor(width - PRAS.labels - PRAS.right));
+  const model = callJson('peerRaster', peerId, columns, PRAS.maxRows);
+  if (!model) return;
+  S.raster = model;
+
+  $('ptl-meta').textContent = !model.found ? ''
+    : `${model.commands} command${model.commands === 1 ? '' : 's'} over `
+      + `${dur(model.endMs - model.startMs)}`
+      + `${model.commands > model.rows.length ? `, ${model.rows.length} drawn` : ''}`
+      + `${model.partial ? ', retained events only' : ''}`;
+  peerRasterLegend(model);
+  paintPeerRaster();
+}
+
+
+/**
+ * Draw the raster already fetched. Dragging a range repaints on every mouse
+ * move and nothing about the chart itself changes while it does, so the band is
+ * painted from the model in hand rather than fetching it again sixty times a
+ * second.
+ */
+function paintPeerRaster() {
+  const model = S.raster;
+  if (!model) return;
+  const columns = model.columns;
+  // The width the columns were cut for, so the two never drift apart.
+  const width = PRAS.labels + columns + PRAS.right;
+  const rows = model.found ? model.rows : [];
+  const height = PRAS.top + Math.max(1, rows.length) * PRAS.row + PRAS.bottom;
+
+  const canvas = $('ptl');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(width * dpr));
+  canvas.height = Math.max(1, Math.floor(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (!rows.length) {
+    ctx.fillStyle = cssVar('--ink-3');
+    ctx.font = `12px ${cssVar('--sans')}`;
+    ctx.fillText('No messages retained for this peer.', PRAS.labels, PRAS.top + 16);
+    return;
+  }
+
+  const inColour = color(0);
+  const outColour = color(1);
+  // Height carries the count, on a log scale: a peer's `tx` outnumbers its
+  // `getaddr` by three orders of magnitude, and a linear ramp would leave
+  // everything but the busiest command as a hairline.
+  const ceiling = Math.log1p(model.max || 1);
+  const thickness = (v) => 2 + Math.round((PRAS.lane - 2) * (Math.log1p(v) / ceiling));
+
+  ctx.font = `10px ${cssVar('--mono')}`;
+  ctx.textBaseline = 'middle';
+  const ruleColour = cssVar('--rule');
+
+  rows.forEach((r, i) => {
+    const mid = Math.round(PRAS.top + i * PRAS.row + PRAS.row / 2) + 0.5;
+
+    // A hairline per row, so a command sent twice is still a row and not a gap.
+    ctx.fillStyle = ruleColour;
+    ctx.fillRect(PRAS.labels, mid, columns, 0.5);
+
+    ctx.fillStyle = cssVar('--ink-2');
+    ctx.fillText(r.kind.length > 13 ? `${r.kind.slice(0, 12)}…` : r.kind, 6, mid);
+
+    // Inbound grows up from the midline, outbound down: the same reading as the
+    // activity chart, with the count in the height rather than the shade.
+    ctx.globalAlpha = 0.9;
+    for (const [flat, colour, up] of [[r.in, inColour, true], [r.out, outColour, false]]) {
+      ctx.fillStyle = colour;
+      for (let k = 0; k < flat.length; k += 2) {
+        const h = thickness(flat[k + 1]);
+        ctx.fillRect(PRAS.labels + flat[k], up ? mid - PRAS.gap - h : mid + PRAS.gap, 1, h);
       }
-    });
+    }
+    ctx.globalAlpha = 1;
+  });
+
+  // Connection events span every row, so they read as boundaries in the
+  // conversation rather than as more traffic.
+  const bottom = PRAS.top + rows.length * PRAS.row;
+  for (const mark of model.marks) {
+    ctx.fillStyle = markColour(mark.kind);
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(PRAS.labels + mark.col, PRAS.top, 1, bottom - PRAS.top);
+    ctx.globalAlpha = 1;
+  }
+
+  peerRasterBand(ctx, model, columns, bottom);
+  peerRasterAxis(ctx, model, columns, height);
+}
+
+
+/** The selected time range, painted over the chart it was dragged on. */
+function peerRasterBand(ctx, model, columns, bottom) {
+  if (!S.peerRange) return;
+  const at = (ms) => PRAS.labels
+    + columns * Math.min(1, Math.max(0, (ms - model.startMs) / rasterSpan(model)));
+  const x0 = at(S.peerRange.from);
+  const x1 = at(S.peerRange.to);
+  ctx.fillStyle = cssVar('--accent');
+  ctx.globalAlpha = 0.16;
+  ctx.fillRect(x0, PRAS.top, Math.max(1, x1 - x0), bottom - PRAS.top);
+  ctx.globalAlpha = 1;
+}
+
+
+function peerRasterAxis(ctx, model, columns, height) {
+  const y = height - PRAS.bottom + 6;
+  ctx.fillStyle = cssVar('--rule-2');
+  ctx.fillRect(PRAS.labels, y - 4, columns, 0.5);
+  ctx.fillStyle = cssVar('--ink-3');
+  ctx.font = `10px ${cssVar('--mono')}`;
+  ctx.textBaseline = 'top';
+  const ticks = Math.max(2, Math.min(8, Math.floor(columns / 150)));
+  for (let i = 0; i <= ticks; i++) {
+    const x = PRAS.labels + (columns * i) / ticks;
+    ctx.fillRect(x, y - 4, 0.5, 4);
+    ctx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
+    const at = model.startMs + ((model.endMs - model.startMs) * i) / ticks;
+    // The date once, at the left; every other tick is a time of day, which is
+    // all that fits and all that changes.
+    ctx.fillText(i === 0 ? utc(at, false) : utc(at, false).slice(11), x, y + 1);
+  }
+  ctx.textAlign = 'left';
+}
+
+
+/**
+ * Direction is above and below the line as well as in the colour, and the
+ * connection marks are named rather than left as three shades of tick.
+ */
+function peerRasterLegend(model) {
+  const box = $('ptl-legend');
+  box.replaceChildren();
+  if (!model.found) return;
+  for (const [colour, label, count] of [
+    [color(0), 'inbound, above the line', model.messagesIn],
+    [color(1), 'outbound, below', model.messagesOut],
+  ]) {
+    const item = swatched('span', 'it static', colour, `${label} `);
+    item.append(el('b', null, num(count)));
+    box.append(item);
+  }
+  const kinds = [...new Set(model.marks.map((m) => m.kind))];
+  for (const kind of kinds) {
+    box.append(swatched('span', 'it static', markColour(kind), kind.replace('_', ' ')));
+  }
+  if (model.marks.length && !model.marksComplete) {
+    box.append(el('span', 'it static dim', 'earlier connection events not kept'));
+  }
+}
+
+
+/** Where on the chart a pointer is: which column, and which row it is over. */
+function peerRasterAt(event) {
+  const model = S.raster;
+  if (!model?.rows.length) return null;
+  const box = $('ptl').getBoundingClientRect();
+  const column = Math.round(event.clientX - box.left - PRAS.labels);
+  if (column < 0 || column >= model.columns) return null;
+  const rowIndex = Math.floor((event.clientY - box.top - PRAS.top) / PRAS.row);
+  return { column, row: model.rows[rowIndex] ?? null };
+}
+
+/**
+ * Where a column begins, in milliseconds.
+ *
+ * The inverse of the mapping the raster is built with, and deliberately the
+ * same arithmetic: column `c` covers `[edge(c), edge(c + 1))`, so a range
+ * dragged from column `a` to column `b` is `[edge(a), edge(b + 1))` and holds
+ * exactly the messages that drew those marks. Anything else and the diagram
+ * below would disagree with the chart above it about what was selected.
+ *
+ * `span` is floored at a millisecond the way the raster's is, so a peer seen at
+ * a single instant still has a column to live in rather than dividing by zero.
+ */
+const rasterSpan = (m) => Math.max(1, m.endMs - m.startMs);
+const rasterEdge = (m, column) => m.startMs + (rasterSpan(m) * column) / m.columns;
+
+
+
+function showPeerRasterTip(event) {
+  const tip = $('ptip');
+  const hit = peerRasterAt(event);
+  if (!hit) { tip.hidden = true; return; }
+  const model = S.raster;
+
+  tip.replaceChildren(el('div', 't', utc(rasterEdge(model, hit.column))));
+  const table = el('table');
+  let any = 0;
+  for (const r of model.rows) {
+    const inbound = cellAt(r.in, hit.column);
+    const outbound = cellAt(r.out, hit.column);
+    if (!inbound && !outbound) continue;
+    any++;
+    const line = row(td(r.kind, r === hit.row ? 'm' : 'm dim'),
+      td(inbound ? num(inbound) : '·', 'n'), td(outbound ? num(outbound) : '·', 'n'));
+    table.append(line);
+  }
+  if (any) {
+    tip.append(el('div', 't', 'in / out'), table);
+  } else {
+    tip.append(el('div', 'dim', 'nothing exchanged'));
+  }
+  const mark = model.marks.find((m) => Math.abs(m.col - hit.column) <= 1);
+  if (mark) tip.append(el('div', 't', mark.kind.replace('_', ' ')));
+  if (!S.peerRange) tip.append(el('div', 't', 'drag to scope the diagram below'));
+
+  tip.hidden = false;
+  const wrap = $('ptl').parentElement.getBoundingClientRect();
+  tip.style.left = `${Math.min(event.clientX - wrap.left + 12, wrap.width - tip.offsetWidth - 6)}px`;
+  tip.style.top = `${Math.max(6, event.clientY - wrap.top - tip.offsetHeight - 10)}px`;
+}
+
+
+/**
+ * Drag a range on the chart and the sequence diagram below is scoped to it;
+ * click without dragging, or press the button, and it goes back to the whole
+ * connection. The chart itself always shows the whole of it, because a selector
+ * that hides what you are selecting from cannot be adjusted.
+ */
+function wirePeerRaster() {
+  const canvas = $('ptl');
+  let drag = null;
+
+  canvas.addEventListener('mousemove', (event) => {
+    if (drag) {
+      const hit = peerRasterAt(event);
+      if (hit) {
+        drag.to = hit.column;
+        setPeerRange(Math.min(drag.from, drag.to), Math.max(drag.from, drag.to));
+      }
+    }
+    showPeerRasterTip(event);
+  });
+  canvas.addEventListener('mouseleave', () => { $('ptip').hidden = true; });
+
+  canvas.addEventListener('mousedown', (event) => {
+    const hit = peerRasterAt(event);
+    if (!hit) return;
+    drag = { from: hit.column, to: hit.column };
+    event.preventDefault();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!drag) return;
+    const dragged = drag.from !== drag.to;
+    drag = null;
+    if (dragged) drawSequence(); else clearPeerRange();
+  });
+
+  $('ptl-clear').addEventListener('click', () => clearPeerRange());
+}
+
+/**
+ * Set the peer-local window from two columns of the raster.
+ *
+ * The chart repaints as the drag goes; the diagram below waits for the mouse to
+ * come up, because redrawing a hundred rows of it on every mouse move would
+ * make the drag itself the slow part.
+ */
+function setPeerRange(fromColumn, toColumn) {
+  const model = S.raster;
+  if (!model?.found) return;
+  const from = Math.floor(rasterEdge(model, fromColumn));
+  // The far edge of the last column, so the message that drew it is inside.
+  S.peerRange = { from, to: Math.max(from + 1, Math.ceil(rasterEdge(model, toColumn + 1))) };
+  S.seq.offset = 0;
+  $('ptl-clear').hidden = false;
+  $('ptl-clear').textContent = `range ${dur(S.peerRange.to - S.peerRange.from)} · clear`;
+  paintPeerRaster();
+}
+
+function clearPeerRange({ redraw = true } = {}) {
+  $('ptl-clear').hidden = true;
+  if (!S.peerRange) return;
+  S.peerRange = null;
+  S.seq.offset = 0;
+  if (!redraw) return;
+  paintPeerRaster();
+  drawSequence();
+}
+
+/**
+ * The window the sequence diagram draws: the range brushed on the overview
+ * timeline, narrowed by the one brushed on this peer's own chart. Two selectors
+ * are two constraints, not two modes -- the narrower of them wins on each end.
+ */
+function seqWindow() {
+  const { timeFrom, timeTo } = S.filter;
+  const range = S.peerRange;
+  if (!range) return [timeFrom, timeTo];
+  return [
+    timeFrom === null ? range.from : Math.max(timeFrom, range.from),
+    timeTo === null ? range.to : Math.min(timeTo, range.to),
+  ];
 }
 
 
@@ -2527,14 +2854,16 @@ function drawSequence() {
   note.replaceChildren();
   if (S.seq.peer == null) return;
 
-  // This peer's messages and connection events, in archive order, honouring the
-  // time range brushed on the overview.
+  // This peer's messages and connection events, in archive order, honouring
+  // both the range brushed on the overview and the one brushed on this peer's
+  // own chart just above the diagram.
+  const [from, to] = seqWindow();
   const page = callJson('sequence', JSON.stringify({
     groups: ['message', 'connection'],
     kinds: [],
     peerIds: [S.seq.peer],
-    timeFrom: S.filter.timeFrom,
-    timeTo: S.filter.timeTo,
+    timeFrom: from,
+    timeTo: to,
     text: '',
   }), S.seq.offset, seqLimit());
   if (!page) return;
@@ -2957,9 +3286,9 @@ function setup() {
   wireFilters();
   wireSequence();
   wireActivity();
+  wirePeerRaster();
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);
-  chartInteraction('ptl', 'ptip', false);
 }
 
 function wireFileLoading() {

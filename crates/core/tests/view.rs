@@ -883,47 +883,93 @@ fn peer_activity_of_an_empty_analysis_is_well_formed() {
 }
 
 #[test]
-fn a_peer_timeline_is_scoped_to_that_peers_own_lifetime() {
-    let analysis = activity_archive();
+fn a_peer_raster_gives_each_command_a_row_of_its_own() {
+    // One peer, three commands, and a chart scoped to that peer's own lifetime
+    // rather than the archive's.
+    let mut events = vec![connection_event(1_000, 1)];
+    for i in 0..20u64 {
+        events.push(message_event(1_000 + i * 100, 1, "inv", true, 100));
+    }
+    for i in 0..10u64 {
+        events.push(message_event(1_050 + i * 200, 1, "getdata", false, 60));
+    }
+    for i in 0..5u64 {
+        events.push(message_event(1_500 + i * 300, 1, "tx", true, 250));
+    }
+    // Another peer's traffic, which must not appear on this one's chart.
+    for i in 0..8u64 {
+        events.push(message_event(3_000 + i * 100, 2, "ping", true, 32));
+    }
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("raster.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
 
-    // Peer 2 only appears in the second half of the archive, and its chart
-    // starts where it does rather than where the archive does.
-    let page = view::peer_timeline(&analysis, 2, 20);
+    let page = view::peer_raster(&analysis, 1, 40, 20);
     assert_eq!(page["found"], true);
-    assert_eq!(page["startMs"], 3_000);
-    assert_eq!(page["endMs"], 3_900);
-    assert_eq!(page["names"], json!(["inbound", "outbound"]));
+    assert_eq!(page["startMs"], 1_000);
+    assert_eq!(
+        page["endMs"], 2_900,
+        "the peer's last message, not the archive's"
+    );
+    assert_eq!(page["columns"], 40);
+    assert_eq!(page["commands"], 3);
 
-    // Every message this peer exchanged is in a bin, and only its own.
-    let series = page["series"].as_array().unwrap();
-    let total = |s: &Value| -> u64 {
-        s.as_array()
+    // Busiest command first, and each direction on its own lane.
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    let sum = |v: &Value| -> u64 {
+        v.as_array()
             .unwrap()
-            .iter()
-            .map(|v| v.as_u64().unwrap())
+            .chunks(2)
+            .map(|pair| pair[1].as_u64().unwrap())
             .sum()
     };
-    assert_eq!(total(&series[0]), 10, "peer 2 received ten messages");
-    assert_eq!(total(&series[1]), 0, "and sent none");
-    let count = page["count"].as_u64().unwrap() as usize;
-    assert_eq!(series[0].as_array().unwrap().len(), count);
-    assert_eq!(series[1].as_array().unwrap().len(), count);
+    for (row, kind, inbound, outbound) in [
+        (&rows[0], "inv", 20, 0),
+        (&rows[1], "getdata", 0, 10),
+        (&rows[2], "tx", 5, 0),
+    ] {
+        assert_eq!(row["kind"], kind);
+        assert_eq!(row["totalIn"], inbound);
+        assert_eq!(row["totalOut"], outbound);
+        assert_eq!(sum(&row["in"]), inbound, "{kind} inbound cells");
+        assert_eq!(sum(&row["out"]), outbound, "{kind} outbound cells");
+    }
 
-    // Peer 1's own chart holds its own traffic, plus its connection event.
-    let one = view::peer_timeline(&analysis, 1, 20);
-    assert_eq!(one["startMs"], 1_000);
-    let series = one["series"].as_array().unwrap();
-    assert_eq!(total(&series[0]), 20);
-    assert_eq!(total(&series[1]), 20);
-    let marks = one["marks"].as_array().unwrap();
+    // Every column referenced is on the chart, and the peak is a real cell.
+    let mut peak = 0;
+    for row in rows {
+        for lane in ["in", "out"] {
+            for pair in row[lane].as_array().unwrap().chunks(2) {
+                assert!(pair[0].as_u64().unwrap() < 40, "column on the chart");
+                peak = peak.max(pair[1].as_u64().unwrap());
+            }
+        }
+    }
+    assert_eq!(page["max"], peak);
+
+    // The connection event is a mark, not traffic.
+    let marks = page["marks"].as_array().unwrap();
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0]["kind"], "inbound");
-    assert!(marks[0]["bin"].as_u64().unwrap() < one["count"].as_u64().unwrap());
+    assert!(marks[0]["col"].as_u64().unwrap() < 40);
+
+    // Asking for fewer rows than there are commands drops the quietest, and
+    // says how many there were.
+    let capped = view::peer_raster(&analysis, 1, 40, 2);
+    assert_eq!(capped["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        capped["commands"], 3,
+        "the ones that did not fit are counted"
+    );
+    assert_eq!(capped["rows"][0]["kind"], "inv");
 }
 
 #[test]
-fn a_peer_timeline_survives_a_peer_seen_once() {
-    // A peer with a single event has no duration to divide into bins.
+fn a_peer_raster_survives_a_peer_seen_once() {
+    // A peer with a single event has no duration to divide into columns.
     let events = vec![message_event(5_000, 42, "ping", true, 32)];
     let stream = record_stream(&header(1, None), &events);
     let mut analysis = Analysis::new(BUDGET);
@@ -931,19 +977,16 @@ fn a_peer_timeline_survives_a_peer_seen_once() {
     analysis.push(&stream).expect("push");
     analysis.end_file();
 
-    let page = view::peer_timeline(&analysis, 42, 100);
+    let page = view::peer_raster(&analysis, 42, 100, 20);
     assert_eq!(page["found"], true);
-    assert_eq!(page["count"], 1);
-    assert!(
-        page["binMs"].as_u64().unwrap() >= 1,
-        "never a zero-width bin"
-    );
-    assert_eq!(page["series"][0], json!([1]));
+    assert_eq!(page["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(page["rows"][0]["kind"], "ping");
+    assert_eq!(page["rows"][0]["in"], json!([0, 1]));
 
     // A peer that is not in the archive is reported as such, not as empty data.
-    let missing = view::peer_timeline(&analysis, 999, 100);
+    let missing = view::peer_raster(&analysis, 999, 100, 20);
     assert_eq!(missing["found"], false);
-    assert_eq!(missing["count"], 0);
+    assert_eq!(missing["rows"].as_array().unwrap().len(), 0);
 }
 
 #[test]

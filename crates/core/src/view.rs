@@ -15,6 +15,7 @@ use crate::relay;
 use crate::store::NO_PEER;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// Totals, per-file detail and the category/group/kind breakdown.
 pub fn summary(analysis: &Analysis) -> Value {
@@ -617,55 +618,111 @@ pub fn connection_durations(analysis: &Analysis, ending: &str) -> Value {
     })
 }
 
-/// One peer's traffic over its own lifetime, inbound against outbound.
+/// One peer's conversation as a raster: a row per P2P command, a column per
+/// pixel of time, split by direction.
 ///
 /// Scoped to the peer's first and last event rather than to the archive: a peer
 /// connected for five minutes of a three-hour capture is a sliver on the shared
 /// timeline and a readable chart on its own.
 ///
+/// A row per command rather than one stack of counts, because the rhythm of a
+/// connection is in *which* commands fire *when* -- a `ping` every two minutes,
+/// an `inv` answered by a `getdata` answered by a `tx`, a burst of handshake at
+/// the start -- and a total by direction cannot show any of it. The all-peers
+/// raster has room for a row per peer; this page has room for a row per command.
+///
 /// Built by scanning the retained events, since the archive histogram is kept
 /// per kind and knows nothing about peers. That means it covers what retention
 /// kept; `partial` says when that was not everything.
-pub fn peer_timeline(analysis: &Analysis, peer_id: u64, max_bins: usize) -> Value {
+pub fn peer_raster(analysis: &Analysis, peer_id: u64, columns: usize, rows: usize) -> Value {
+    let columns = columns.clamp(1, 4096);
     let empty = json!({
-        "found": false, "startMs": 0, "endMs": 0, "binMs": 1, "count": 0,
-        "series": [[], []], "names": ["inbound", "outbound"], "marks": [],
-        "partial": false,
+        "found": false, "startMs": 0, "endMs": 0, "columns": columns, "binMs": 0.0,
+        "rows": [], "marks": [], "max": 0, "commands": 0, "partial": false,
     });
     let Some(peer) = analysis.peers.get(peer_id) else {
         return empty;
     };
 
     let start = peer.first_seen;
-    // A peer seen at a single instant still needs a bin to live in.
+    // A peer seen at a single instant still needs a column to live in.
     let span = peer.duration_ms().max(1);
-    let bins = max_bins.clamp(1, 4096).min(span as usize).max(1);
-    let bin_ms = span.div_ceil(bins as u64).max(1);
-    let count = (span.div_ceil(bin_ms) as usize).clamp(1, bins);
+    let column_of = |timestamp: u64| -> usize {
+        (((timestamp.saturating_sub(start)) as u128 * columns as u128) / span as u128) as usize
+    };
 
-    let mut inbound = vec![0u64; count];
-    let mut outbound = vec![0u64; count];
+    // Kind id -> row, assigned on first sight and then ranked by traffic. The
+    // kind table is archive-wide and mostly other peers' commands, so this
+    // indexes by the kinds this peer actually used.
+    let mut row_of: HashMap<u16, usize> = HashMap::new();
+    let mut totals: Vec<(u16, u64, u64)> = Vec::new();
+    let mut cells: Vec<Vec<u64>> = Vec::new();
+
     let timestamps = analysis.store.timestamps();
     let peers = analysis.store.peers();
     let flags = analysis.store.flags();
+    let kinds = analysis.store.kinds();
     for i in 0..timestamps.len() {
         if peers[i] != peer.index || flags[i] & crate::store::flags::HAS_DIRECTION == 0 {
             continue;
         }
-        let bin = (((timestamps[i].saturating_sub(start)) / bin_ms) as usize).min(count - 1);
-        if flags[i] & crate::store::flags::INBOUND != 0 {
-            inbound[bin] += 1;
+        let inbound = flags[i] & crate::store::flags::INBOUND != 0;
+        let row = *row_of.entry(kinds[i]).or_insert_with(|| {
+            totals.push((kinds[i], 0, 0));
+            cells.push(vec![0; columns * 2]);
+            totals.len() - 1
+        });
+        if inbound {
+            totals[row].1 += 1;
         } else {
-            outbound[bin] += 1;
+            totals[row].2 += 1;
         }
+        let column = column_of(timestamps[i]).min(columns - 1);
+        cells[row][column * 2 + usize::from(inbound)] += 1;
     }
+
+    // Busiest command first, and only as many as the chart has room to draw.
+    // The rest are counted, not dropped silently.
+    let mut order: Vec<usize> = (0..totals.len()).collect();
+    order.sort_by_key(|&row| std::cmp::Reverse(totals[row].1 + totals[row].2));
+    let commands = order.len();
+    order.truncate(rows.clamp(1, 64));
+
+    let mut peak = 0u64;
+    let rows: Vec<Value> = order
+        .iter()
+        .map(|&row| {
+            let (kind, total_in, total_out) = totals[row];
+            // Sparse: for most commands most columns are empty, and sending
+            // those would dominate the payload.
+            let mut inbound = Vec::new();
+            let mut outbound = Vec::new();
+            for column in 0..columns {
+                for (lane, into) in [(1, &mut inbound), (0, &mut outbound)] {
+                    let value = cells[row][column * 2 + lane];
+                    if value > 0 {
+                        into.push(column as u64);
+                        into.push(value);
+                        peak = peak.max(value);
+                    }
+                }
+            }
+            json!({
+                "kind": analysis.kinds.get(kind).map_or("", |k| k.name.as_str()),
+                "in": inbound,
+                "out": outbound,
+                "totalIn": total_in,
+                "totalOut": total_out,
+            })
+        })
+        .collect();
 
     let marks: Vec<Value> = peer
         .lifecycle
         .iter()
         .map(|e| {
             json!({
-                "bin": ((e.timestamp.saturating_sub(start) / bin_ms) as usize).min(count - 1),
+                "col": column_of(e.timestamp).min(columns - 1),
                 "kind": e.kind.as_str(),
                 "timestamp": e.timestamp,
             })
@@ -676,13 +733,18 @@ pub fn peer_timeline(analysis: &Analysis, peer_id: u64, max_bins: usize) -> Valu
         "found": true,
         "startMs": start,
         "endMs": peer.last_seen,
-        "binMs": bin_ms,
-        "count": count,
-        "series": [inbound, outbound],
-        "names": ["inbound", "outbound"],
+        "columns": columns,
+        "binMs": span as f64 / columns as f64,
+        "rows": rows,
+        "commands": commands,
         "marks": marks,
         "marksComplete": peer.lifecycle_total as usize <= peer.lifecycle.len(),
+        "max": peak,
+        "messagesIn": peer.messages_in,
+        "messagesOut": peer.messages_out,
         "partial": analysis.store.is_full(),
+        "retained": analysis.store.len(),
+        "totalEvents": analysis.total_events,
     })
 }
 
