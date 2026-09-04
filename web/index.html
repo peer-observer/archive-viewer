@@ -2427,11 +2427,16 @@ const SEQ = {
   row: 24, head: 46, gutter: 168, minLane: 190, pad: 12, tie: 9, tieDepth: 6,
   // Rows are spaced by how long the node waited between messages. A fixed pitch
   // draws a two-second silence exactly like two messages in the same
-  // millisecond, which is the one thing a sequence diagram is for. Log, because
-  // the gaps span microseconds to minutes; a floor, because any gap at all needs
-  // room for the figure that labels it; a ceiling, because a peer that went
-  // quiet for an hour must not push the next message off the page.
-  minGap: 11, gapScale: 2.2, maxGap: 40,
+  // millisecond, which is the one thing a sequence diagram is for.
+  //
+  // Nothing under `minGapMs` splits at all. Timestamps have millisecond
+  // resolution and Bitcoin Core batches its sends, so a gap of a few
+  // milliseconds is the same instant as far as anything here is concerned, and
+  // prising two rows apart to write "2 ms" between them says nothing. Above it,
+  // log, because the gaps span microseconds to minutes; a floor, because a band
+  // needs room for the figure that labels it; a ceiling, because a peer that
+  // went quiet for an hour must not push the next message off the page.
+  minGapMs: 10, minGap: 11, gapScale: 2.2, maxGap: 40,
 };
 
 
@@ -2571,7 +2576,7 @@ function seqLayout(page) {
   let previous = null;
   for (const r of page.rows) {
     const gap = previous === null ? 0 : Math.max(0, r.timestamp - previous);
-    const band = gap > 0
+    const band = gap >= SEQ.minGapMs
       ? Math.min(SEQ.maxGap, Math.max(SEQ.minGap, Math.round(SEQ.gapScale * Math.log2(1 + gap))))
       : 0;
     gaps.push({ ms: gap, band, at: y + band / 2 });

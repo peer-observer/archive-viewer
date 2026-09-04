@@ -64,9 +64,7 @@ reads directly off it:
 
 ```
 06:18:39.503   <- version (123 B)
-                      1 ms
 06:18:39.504   -> version (102 B)
-                      2 ms
 06:18:39.506   -> wtxidrelay
 06:18:39.506   -> sendaddrv2
 06:18:39.506   -> verack
@@ -76,13 +74,17 @@ reads directly off it:
 
 Rows are spaced by how long the node waited, and the wait is written in the band
 it created. A fixed pitch draws a two-second silence exactly like two messages in
-the same millisecond, which is the one thing a sequence diagram is for. The scale
-is logarithmic, since the gaps run from microseconds to minutes; it has a floor,
-so any gap at all leaves room for the figure that labels it; and a ceiling, so a
-peer that went quiet for an hour does not push the next message off the page.
-Messages inside the same millisecond stay packed together, which is itself the
-right picture. On the sample archive that makes a hundred rows about a quarter
-taller, with roughly half the gaps carrying a figure.
+the same millisecond, which is the one thing a sequence diagram is for.
+
+Anything under ten milliseconds does not split at all. Timestamps have
+millisecond resolution and Bitcoin Core batches its sends, so a gap of a few
+milliseconds is the same instant as far as any of this is concerned, and prising
+two rows apart to write "2 ms" between them says nothing. Above that the scale is
+logarithmic, since the gaps run from ten milliseconds to minutes; it has a floor,
+so a band always has room for the figure that labels it; and a ceiling, so a peer
+that went quiet for an hour does not push the next message off the page. On the
+sample archive that leaves a hundred rows about a sixth taller than a fixed
+pitch, with twenty to thirty of the gaps carrying a figure rather than half.
 
 
 The actors stay put while the messages scroll under them: the diagram is two
