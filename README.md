@@ -95,9 +95,9 @@ asked after the fact: for every transaction, which peer announced it first, how
 far behind the others were, and how many bytes went on receiving something the
 node already had. Per peer that is a scorecard — first-to-announce count against
 duplicate bytes contributed — which is the evidence for whether a peer is
-earning its connection slot. Beside it, how each kind of request fared: how many
-were sent, how many were answered, how many went unanswered, and how long the
-answers took.
+earning its connection slot. Beside it, how each kind of request fared across every
+peer: how many were sent, how many were answered, which side stayed silent when
+they were not, and how long the answers took.
 
 On a 1.07 GB archive of a live node:
 
@@ -131,6 +131,17 @@ that the views state rather than paper over:
   `low_data`, the viewer checks whether the answering command appears anywhere
   in the archive at all, and shows *not captured* instead of a number that would
   certainly be wrong.
+
+Reply times are kept per request kind across every peer, rather than per peer.
+One number per peer would have to fold a ping round trip together with a
+`getaddr` that Core answers on a thirty-second timer, and that mixture means
+nothing; split by request kind, each row is one comparable thing. Selecting a
+row shows how long that kind took, in each direction:
+
+```
+getdata     sent 584,348   answered 575,925   peers  p50 488 ms
+                                              this node  p50 1 ms
+```
 
 Tracking is bounded: two million distinct transaction hashes, after which the
 view says tracking stopped and the figures cover the part of the archive it

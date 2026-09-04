@@ -343,21 +343,6 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         object.insert("lifecycle".into(), Value::Array(lifecycle));
         object.insert("lifecycleTotal".into(), json!(peer.lifecycle_total));
         object.insert("lifecycleCap".into(), json!(crate::peers::LIFECYCLE_CAP));
-        // How this peer answered, and what it failed to answer. The
-        // distribution mixes every kind of request, because keeping one per
-        // exchange for every peer is not affordable; `view::exchanges` breaks
-        // the same measurements down by request kind across all peers.
-        object.insert(
-            "replies".into(),
-            peer.replies
-                .as_deref()
-                .map_or_else(|| latencies(&Latencies::default()), latencies),
-        );
-        object.insert("unanswered".into(), json!(peer.unanswered));
-        object.insert(
-            "unansweredMeaningful".into(),
-            json!(unanswered_is_meaningful(analysis)),
-        );
         object.insert(
             "relay".into(),
             analysis
@@ -645,7 +630,7 @@ pub fn unanswered_is_meaningful(analysis: &Analysis) -> bool {
         .exchanges
         .iter()
         .enumerate()
-        .any(|(index, stats)| stats.unanswered > 0 && !replies_captured(analysis, index))
+        .any(|(index, stats)| stats.unanswered() > 0 && !replies_captured(analysis, index))
 }
 
 /// How each kind of request fared, and how long the answers took.
@@ -666,7 +651,9 @@ pub fn exchanges(analysis: &Analysis) -> Value {
                 "repliesCaptured": replies_captured(analysis, index),
                 "opened": stats.opened,
                 "answered": stats.answered,
-                "unanswered": stats.unanswered,
+                "unanswered": stats.unanswered(),
+                "unansweredByPeers": stats.unanswered_by_peers,
+                "unansweredByUs": stats.unanswered_by_us,
                 "undetermined": stats.undetermined(),
                 "peerLatency": latencies(&analysis.reply_latency[index]),
                 "ourLatency": latencies(&analysis.our_reply_latency[index]),

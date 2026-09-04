@@ -423,7 +423,8 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         </div>
         <div class="p">
           <div class="h"><span>Requests and replies</span></div>
-          <div class="scroll" style="max-height:calc(100vh - 420px)"><table id="texch"></table></div>
+          <div class="scroll" style="max-height:38vh"><table id="texch"></table></div>
+          <div class="body" id="rlat"></div>
           <div class="body dim" id="rexchnote"></div>
         </div>
       </div>
@@ -546,6 +547,7 @@ const S = {
   netRows: [], netNames: {}, netSelected: null, asnState: 'idle',
   seqPeers: [], seqOffset: 0, seqSelected: null,
   relayRows: [], relaySort: { key: "first", desc: true },
+  exchangeRows: [], exchangeSel: null,
   tab: 'overview',
 };
 
@@ -616,6 +618,7 @@ async function loadFiles(list) {
   S.peerMode = 'peers'; S.netSelected = null; S.netRows = []; S.netNames = {};
   S.seqPeers = []; S.seqOffset = 0; S.seqSelected = null;
   S.relayRows = []; S.relaySort = { key: "first", desc: true };
+  S.exchangeRows = []; S.exchangeSel = null;
   S.filter = { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' };
 
   const total = files.reduce((sum, f) => sum + f.size, 0);
@@ -1196,23 +1199,6 @@ function selectPeer(peerId) {
     }
     table.append(thead, tbody);
     panel.append(wrap(table));
-  }
-
-  if (d.replies.count || (d.unanswered && d.unansweredMeaningful)) {
-    panel.append(sub('How it answered'));
-    const body = el('div', 'body');
-    // One distribution across every kind of request, because keeping one per
-    // request kind for every peer is not affordable. The Relay tab breaks the
-    // same measurements down by request kind, across all peers.
-    distribution(body, d.replies, 'It never answered a request.');
-    if (d.unanswered && d.unansweredMeaningful) {
-      const line = el('div', 'dim');
-      line.style.marginTop = '6px';
-      line.textContent = `${num(d.unanswered)} request${d.unanswered === 1 ? '' : 's'} `
-        + 'went unanswered past the point of waiting.';
-      body.append(line);
-    }
-    panel.append(body);
   }
 
   if (d.relay) {
@@ -1796,15 +1782,29 @@ function paintRelay() {
 }
 
 /**
- * How each kind of request fared.
+ * How each kind of request fared, across every peer.
  *
- * `sent` is exact. Of the rest, "answered" and "timed out" are what could be
+ * These are archive-wide rather than per peer, deliberately: a single number
+ * per peer would have to fold a ping round trip together with a `getaddr` that
+ * Core answers on a thirty-second timer, and the mixture means nothing. Split
+ * by request kind, each row is one comparable thing. Selecting a row shows how
+ * long that kind of request actually took to answer.
+ *
+ * `sent` is exact. Of the rest, "answered" and "no reply" are what could be
  * established; the remainder could not be, and the table says so rather than
  * folding it into either column.
  */
 function renderExchanges() {
   const page = callJson('exchanges');
   if (!page) return;
+  S.exchangeRows = page.rows;
+  // Land on the busiest kind that has answers to show, so the panel below is
+  // never empty on arrival.
+  if (!page.rows.some((r) => r.request === S.exchangeSel)) {
+    const answered = [...page.rows].sort((a, b) => b.answered - a.answered);
+    S.exchangeSel = (answered.find((r) => r.peerLatency.count) ?? page.rows[0])?.request ?? null;
+  }
+
   const table = $('texch');
   const thead = el('thead');
   const hr = el('tr');
@@ -1814,11 +1814,11 @@ function renderExchanges() {
   }
   thead.append(hr);
 
-  const tbody = el("tbody");
+  const tbody = el('tbody');
   let optional = false;
   const uncaptured = [];
   for (const r of page.rows) {
-    const tr = el('tr');
+    const tr = el('tr', r.request === S.exchangeSel ? 'on' : null);
     const name = el('td', 'm');
     name.textContent = r.request;
     name.title = `answered by ${r.replies.join(', ')}`;
@@ -1843,14 +1843,13 @@ function renderExchanges() {
     }
     const median = el('td', 'n');
     median.textContent = r.peerLatency.p50Ms == null ? '—' : dur(r.peerLatency.p50Ms);
-    median.title = r.ourLatency.p50Ms == null
-      ? 'how long peers took to answer'
-      : `peers ${dur(r.peerLatency.p50Ms ?? 0)}; this node ${dur(r.ourLatency.p50Ms)}`;
     tr.append(name, td(num(r.opened), 'n'), td(num(r.answered), 'n'), noReply,
               td(num(r.undetermined), 'n'), median);
+    tr.addEventListener('click', () => { S.exchangeSel = r.request; renderExchanges(); });
     tbody.append(tr);
   }
   table.replaceChildren(thead, tbody);
+  renderExchangeLatency();
 
   const foot = $('rexchnote');
   foot.replaceChildren();
@@ -1871,6 +1870,40 @@ function renderExchanges() {
   }
   for (const line of lines) foot.append(el('div', null, line));
   foot.style.whiteSpace = 'normal';
+}
+
+/**
+ * Reply times for the selected request kind, one side at a time.
+ *
+ * Each direction gets its own distribution and its own failure count: a
+ * `getaddr` this node never answered and a `getaddr` a peer never answered are
+ * opposite findings, and one combined number would hide both.
+ */
+function renderExchangeLatency() {
+  const box = $('rlat');
+  box.replaceChildren();
+  const row = S.exchangeRows.find((r) => r.request === S.exchangeSel);
+  if (!row) return;
+
+  const sides = [
+    ['peers answered', row.peerLatency, row.unansweredByPeers, 'No peer answered one of these.'],
+    ['this node answered', row.ourLatency, row.unansweredByUs, 'This node was never asked.'],
+  ];
+  for (const [label, l, silent, empty] of sides) {
+    const head = el('div', 'dim');
+    head.style.cssText = 'margin-top:8px;font-family:var(--mono);font-size:11px';
+    head.textContent = `${row.request} — ${label}`;
+    box.append(head);
+    const chart = el('div');
+    distribution(chart, l, empty);
+    box.append(chart);
+    if (silent && !row.optional && row.repliesCaptured) {
+      const line = el('div', 'dim');
+      line.style.fontSize = '11px';
+      line.textContent = `${num(silent)} more went unanswered.`;
+      box.append(line);
+    }
+  }
 }
 
 /* ------------------------------------------------------- sequence diagram */

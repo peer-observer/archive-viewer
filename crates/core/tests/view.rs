@@ -602,27 +602,17 @@ fn exchanges_report_what_each_request_kind_got_back() {
 }
 
 #[test]
-fn peer_detail_carries_the_relay_record_and_reply_distribution() {
+fn peer_detail_carries_the_relay_record() {
     let analysis = relay_archive();
 
+    // Reply times and unanswered counts are archive-wide, not per peer: see
+    // `exchanges_report_what_each_request_kind_got_back`. What is per peer is
+    // the relay scorecard, because who announced first is a fact about a peer.
     let three = view::peer_detail(&analysis, 3);
-    assert_eq!(three["unanswered"], 0);
-    assert_eq!(three["replies"]["count"], 2, "a pong and a transaction");
+    assert!(three["replies"].is_null(), "no per-peer reply distribution");
+    assert!(three["unanswered"].is_null());
     assert_eq!(three["relay"]["first"], 1);
-    // The bucket edges travel with the counts, so the page need not know them.
-    let edges = three["replies"]["edges"].as_array().unwrap();
-    assert_eq!(
-        edges.len(),
-        three["replies"]["buckets"].as_array().unwrap().len()
-    );
-    assert_eq!(edges[0]["lowMs"], 0);
-    assert!(
-        edges.last().unwrap()["highMs"].is_null(),
-        "the last bucket is open-ended"
-    );
-
-    let four = view::peer_detail(&analysis, 4);
-    assert_eq!(four["unanswered"], 1, "its ping was never answered");
+    assert_eq!(three["relay"]["late"], 1);
 
     // A peer that never relayed anything says so rather than inventing zeroes.
     let events = vec![message_event(1_000, 9, "addrv2", true, 60)];
@@ -631,9 +621,7 @@ fn peer_detail_carries_the_relay_record_and_reply_distribution() {
     quiet.begin_file("q.bin".to_string(), stream.len() as u64);
     quiet.push(&stream).expect("push");
     quiet.end_file();
-    let detail = view::peer_detail(&quiet, 9);
-    assert!(detail["relay"].is_null());
-    assert_eq!(detail["replies"]["count"], 0);
+    assert!(view::peer_detail(&quiet, 9)["relay"].is_null());
 }
 
 #[test]
@@ -676,10 +664,6 @@ fn silence_says_nothing_when_the_reply_was_never_captured() {
         "but no verack appears anywhere in the archive"
     );
     assert_eq!(page["unansweredMeaningful"], false);
-    assert_eq!(
-        view::peer_detail(&analysis, 0)["unansweredMeaningful"],
-        false
-    );
 
     // The same archive with veracks in it is trustworthy again.
     events.insert(1, message_event(1_005, 0, "verack", true, 24));
@@ -697,4 +681,63 @@ fn silence_says_nothing_when_the_reply_was_never_captured() {
         .unwrap();
     assert_eq!(version["repliesCaptured"], true);
     assert_eq!(page["unansweredMeaningful"], true);
+}
+
+#[test]
+fn reply_times_are_reported_per_request_kind_across_every_peer() {
+    let analysis = relay_archive();
+    let page = view::exchanges(&analysis);
+    let rows = page["rows"].as_array().unwrap();
+    let ping = rows.iter().find(|r| r["request"] == "ping").unwrap();
+
+    // One distribution per request kind, not per peer: a single number per peer
+    // would fold a ping round trip together with a `getaddr` that Core answers
+    // on a thirty-second timer.
+    assert_eq!(ping["peerLatency"]["count"], 1);
+    assert_eq!(ping["peerLatency"]["p50Ms"], 120);
+    assert_eq!(ping["ourLatency"]["count"], 0, "nobody pinged this node");
+
+    // The bucket edges travel with the counts, so the page never has to know
+    // how the histogram is laid out.
+    let latency = &ping["peerLatency"];
+    let edges = latency["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), latency["buckets"].as_array().unwrap().len());
+    assert_eq!(edges[0]["lowMs"], 0);
+    assert!(
+        edges.last().unwrap()["highMs"].is_null(),
+        "the last bucket is open-ended"
+    );
+
+    // Both directions are measured: this node answered peer 3's getdata-driven
+    // transaction requests, and its own getdata was answered by the peer.
+    let getdata = rows.iter().find(|r| r["request"] == "getdata").unwrap();
+    assert!(getdata["peerLatency"]["count"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn unanswered_requests_say_which_side_stayed_silent() {
+    // This node asks peer 3 and is ignored; peer 4 asks this node and is
+    // ignored. Adding those together would hide both.
+    let events = vec![
+        message_event(1_000, 3, "getaddr", false, 24),
+        message_event(1_100, 4, "getaddr", true, 24),
+        message_event(1_000 + 10 * 60 * 1_000, 3, "feefilter", false, 32),
+    ];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("silent.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let page = view::exchanges(&analysis);
+    let getaddr = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["request"] == "getaddr")
+        .expect("getaddrs were sent");
+    assert_eq!(getaddr["opened"], 2);
+    assert_eq!(getaddr["unanswered"], 2);
+    assert_eq!(getaddr["unansweredByPeers"], 1, "peer 3 ignored this node");
+    assert_eq!(getaddr["unansweredByUs"], 1, "this node ignored peer 4");
 }

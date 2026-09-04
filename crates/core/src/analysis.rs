@@ -44,6 +44,10 @@ pub struct FileSummary {
 
 /// How one kind of request fared across the archive.
 ///
+/// Archive-wide rather than per peer, and split by which side stayed silent: a
+/// `getaddr` this node never answered and a `getaddr` a peer never answered are
+/// opposite findings, and adding them together would hide both.
+///
 /// `opened - answered - unanswered` is the undetermined remainder: requests
 /// this tool could not judge either way. It is near zero for the exchanges
 /// Bitcoin Core sends one at a time, and can be large for the ones it
@@ -55,16 +59,22 @@ pub struct ExchangeStats {
     pub opened: u64,
     /// Of those, how many got at least one reply.
     pub answered: u64,
-    /// Of those, how many were shown to have got none.
-    pub unanswered: u64,
+    /// Requests this node sent that a peer never answered.
+    pub unanswered_by_peers: u64,
+    /// Requests a peer sent that this node never answered.
+    pub unanswered_by_us: u64,
 }
 
 impl ExchangeStats {
+    pub fn unanswered(&self) -> u64 {
+        self.unanswered_by_peers + self.unanswered_by_us
+    }
+
     /// Requests whose fate could not be established.
     pub fn undetermined(&self) -> u64 {
         self.opened
             .saturating_sub(self.answered)
-            .saturating_sub(self.unanswered)
+            .saturating_sub(self.unanswered())
     }
 }
 
@@ -275,12 +285,10 @@ impl Analysis {
                     stats.answered += 1;
                 }
             }
-            // Whose latency this is depends on who replied. A message coming in
-            // answers a request that went out, so it measures the peer; one
-            // going out measures this node.
+            // Which side this times depends on who replied. A message coming
+            // in answers a request that went out, so it times the peer; one
+            // going out times this node.
             let side = if meta.inbound {
-                self.peers
-                    .record_reply(meta.peer_id, timestamp, answered.elapsed_ms);
                 &mut self.reply_latency
             } else {
                 &mut self.our_reply_latency
@@ -290,11 +298,7 @@ impl Analysis {
             }
         }
         if let Some(unanswered) = observed.displaced {
-            self.note_unanswered(
-                meta.peer_id,
-                unanswered.exchange,
-                unanswered.request_inbound,
-            );
+            self.note_unanswered(unanswered.exchange, unanswered.request_inbound);
         }
 
         self.since_sweep += 1;
@@ -306,24 +310,27 @@ impl Analysis {
 
     /// Retire requests that have waited past their window.
     fn sweep_exchanges(&mut self, now: u64) {
-        // Collected first: the sweep borrows the tracker, and recording borrows
-        // the peer table on the same struct.
-        let mut retired = Vec::new();
-        self.exchange_tracker.sweep(now, |peer_id, unanswered| {
-            retired.push((peer_id, unanswered))
+        let exchanges = &mut self.exchanges;
+        self.exchange_tracker.sweep(now, |_, unanswered| {
+            if let Some(stats) = exchanges.get_mut(unanswered.exchange) {
+                if unanswered.request_inbound {
+                    stats.unanswered_by_us += 1;
+                } else {
+                    stats.unanswered_by_peers += 1;
+                }
+            }
         });
-        for (peer_id, unanswered) in retired {
-            self.note_unanswered(peer_id, unanswered.exchange, unanswered.request_inbound);
-        }
     }
 
-    fn note_unanswered(&mut self, peer_id: u64, exchange: usize, request_was_inbound: bool) {
+    /// A request that went unanswered. `request_was_inbound` says whose
+    /// silence it was: an inbound request is one this node failed to answer.
+    fn note_unanswered(&mut self, exchange: usize, request_was_inbound: bool) {
         if let Some(stats) = self.exchanges.get_mut(exchange) {
-            stats.unanswered += 1;
-        }
-        // The request went out from here, so the silence is the peer's.
-        if !request_was_inbound {
-            self.peers.record_unanswered(peer_id);
+            if request_was_inbound {
+                stats.unanswered_by_us += 1;
+            } else {
+                stats.unanswered_by_peers += 1;
+            }
         }
     }
 }

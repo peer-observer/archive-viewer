@@ -4,7 +4,6 @@
 //! are only unique within one node run: an archive spanning a restart can reuse
 //! them, and the UI says so.
 
-use crate::latency::Latencies;
 use crate::proto::ebpf_extractor::{
     connection::{connection_event::Event as ConnEvent, Connection, ConnectionEvent},
     message::MessageEvent,
@@ -115,16 +114,6 @@ pub struct PeerStats {
     /// Exact count per lifecycle kind, indexed by [`LifecycleKind::index`].
     /// The list above is capped, so this is the only exact per-kind source.
     pub lifecycle_counts: [u32; 5],
-    /// Requests this peer answered, and how long it took.
-    ///
-    /// Boxed because most peers never answer anything: an archive of a churny
-    /// node has hundreds of thousands of peers that connect, get evicted and
-    /// are never asked for a thing, and eighty bytes each for an empty
-    /// distribution is a megabyte per twelve thousand of them.
-    pub replies: Option<Box<Latencies>>,
-    /// Requests this peer was asked and never answered, by the time this tool
-    /// gave up waiting. See [`crate::exchange`] for what counts as a request.
-    pub unanswered: u32,
 }
 
 impl PeerStats {
@@ -198,23 +187,6 @@ impl PeerTable {
         });
         peer.touch(timestamp);
         peer
-    }
-
-    /// Note that this peer answered a request in `elapsed_ms`.
-    pub fn record_reply(&mut self, peer_id: u64, timestamp: u64, elapsed_ms: u64) {
-        self.entry(peer_id, timestamp)
-            .replies
-            .get_or_insert_with(Default::default)
-            .add(elapsed_ms);
-    }
-
-    /// Note that a request to this peer was given up on unanswered.
-    pub fn record_unanswered(&mut self, peer_id: u64) {
-        // No `entry`: a request can only exist for a peer already in the table,
-        // and this must not invent one or move its first-seen time.
-        if let Some(peer) = self.peers.get_mut(&peer_id) {
-            peer.unanswered = peer.unanswered.saturating_add(1);
-        }
     }
 
     /// Record a P2P message. `command` is the interned kind id of `meta.command`.
