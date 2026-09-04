@@ -354,7 +354,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <div class="p">
           <div class="h">
             <span class="seg">
-              <button id="mode-peers" class="on">peers</button><button id="mode-nets">networks</button>
+              <button id="mode-peers" class="on">peers</button><button id="mode-nets">networks</button><button id="mode-agents">clients</button>
             </span>
             <input type="search" id="psearch" placeholder="address or peer id">
             <span class="sp"></span>
@@ -1216,32 +1216,42 @@ function renderPeers() {
 function paintPeers() {
   const needle = $('psearch').value.trim().toLowerCase();
   const rows = needle
-    ? S.peerRows.filter((p) => String(p.peerId).includes(needle) ||
-        (p.addr ?? '').toLowerCase().includes(needle))
+    ? S.peerRows.filter((p) => String(p.peerId).includes(needle)
+        || (p.addr ?? "").toLowerCase().includes(needle)
+        || (p.userAgent ?? "").toLowerCase().includes(needle))
     : S.peerRows;
 
-  const cols = [['peerId', 'peer', 1], ['addr', 'address', 0], ['connType', 'type', 0],
-                ['firstSeen', 'first seen', 0], ['duration', 'seen for', 1],
-                ['messagesIn', 'in', 1], ['messagesOut', 'out', 1],
-                ['bytesIn', 'bytes in', 1], ['bytesOut', 'bytes out', 1]];
+  // `userAgent` has no sort of its own: the clients view is where that
+  // question is answered, and a column here is for recognising a peer.
+  const cols = [["peerId", "peer", 1], ["addr", "address", 0], ["userAgent", "client", 0],
+                ["connType", "type", 0],
+                ["firstSeen", "first seen", 0], ["duration", "seen for", 1],
+                ["messagesIn", "in", 1], ["messagesOut", "out", 1],
+                ["bytesIn", "bytes in", 1], ["bytesOut", "bytes out", 1]];
   const thead = el('thead');
   const hr = el('tr');
   for (const [key, label, isNum] of cols) {
-    const th = el('th', `s${isNum ? ' n' : ''}`);
+    const sortable = key !== 'userAgent';
+    const th = el('th', `${sortable ? 's' : ''}${isNum ? ' n' : ''}`);
     th.textContent = label + (S.peerSort.key === key ? (S.peerSort.desc ? ' ↓' : ' ↑') : '');
-    th.addEventListener('click', () => {
-      if (S.peerSort.key === key) S.peerSort.desc = !S.peerSort.desc;
-      else S.peerSort = { key, desc: true };
-      renderPeers();
-    });
+    if (sortable) {
+      th.addEventListener('click', () => {
+        if (S.peerSort.key === key) S.peerSort.desc = !S.peerSort.desc;
+        else S.peerSort = { key, desc: true };
+        renderPeers();
+      });
+    }
     hr.append(th);
   }
+
   thead.append(hr);
 
   const tbody = el('tbody');
   for (const p of rows.slice(0, 3000)) {
     const tr = el('tr', S.peer === p.peerId ? 'on' : null);
-    tr.append(td(String(p.peerId), 'n'), td(p.addr ?? '—', 'm'), td(p.connType ?? '—', 'm dim'),
+    tr.append(td(String(p.peerId), 'n'), td(p.addr ?? '—', 'm'),
+              td(p.userAgent ?? '—', 'm dim'),
+              td(p.connType ?? '—', 'm dim'),
               td(utc(p.firstSeen, false), 'm'), td(dur(p.durationMs), 'n'),
               td(num(p.messagesIn), 'n'), td(num(p.messagesOut), 'n'),
               td(bytes(p.bytesIn), 'n'), td(bytes(p.bytesOut), 'n'));
@@ -1283,9 +1293,11 @@ function renderPeerPage(peerId) {
     return;
   }
 
-  $('peer-title').textContent = `peer ${peerId}   ${d.addr ?? ''}`;
-  $('peer-stats').replaceChildren(...[
-    ['connection', d.connType ?? 'unknown', d.network ? `network ${d.network}` : ''],
+  $("peer-title").textContent = `peer ${peerId}   ${d.addr ?? ""}`;
+  $("peer-stats").replaceChildren(...[
+    ['user agent', d.userAgent ?? 'not seen', userAgentNote(d)],
+
+    ["connection", d.connType ?? "unknown", d.network ? `network ${d.network}` : ""],
     ['seen for', dur(d.durationMs), `from ${utc(d.firstSeen, false)}`],
     ['messages', num(d.messagesIn + d.messagesOut),
       `${num(d.messagesIn)} in / ${num(d.messagesOut)} out`],
@@ -1314,6 +1326,24 @@ function renderPeerPage(peerId) {
       el('div', 'body dim', 'Select a message in the diagram to decode it.'));
   }
   drawSequence(SEQ_PEER);
+}
+
+/**
+ * Why a peer has no client string, when it has none.
+ *
+ * Usually because it was already connected when the capture started: the
+ * handshake that would have named it happened before the archive begins. On the
+ * sample archive that accounts for 107 of the 130 unnamed peers, and every one
+ * of the 130 is missing an inbound version message rather than having one this
+ * tool failed to read.
+ */
+function userAgentNote(d) {
+  if (d.userAgent) return `from ${d.userAgentFrom}`;
+  const start = Number(S.summary?.totals?.firstTimestamp ?? 0);
+  if (start && Number(d.firstSeen) - start < 5_000) {
+    return 'already connected when the archive begins';
+  }
+  return 'no version message or getpeerinfo poll';
 }
 
 function drawPeerTimeline(peerId) {
@@ -1580,9 +1610,12 @@ function selectNetwork(r) {
 }
 
 function syncModeButtons() {
-  $('mode-peers').classList.toggle('on', S.peerMode === 'peers');
-  $('mode-nets').classList.toggle('on', S.peerMode === 'networks');
-  $('psearch').placeholder = S.peerMode === 'peers' ? 'address or peer id' : 'ASN, name or country';
+  for (const [id, mode] of [['mode-peers', 'peers'], ['mode-nets', 'networks'],
+                            ['mode-agents', 'agents']]) {
+    $(id).classList.toggle('on', S.peerMode === mode);
+  }
+  $('psearch').placeholder = S.peerMode === 'peers' ? 'address or peer id'
+    : S.peerMode === 'networks' ? 'ASN, name or country' : 'client name';
 }
 
 function showPeerMode(mode) {
@@ -1591,8 +1624,8 @@ function showPeerMode(mode) {
   S.peer = null;
   syncModeButtons();
   $('psearch').value = '';
-  // A peer now has a page of its own, so the side panel is only needed for the
-  // network detail; in peer mode the table takes the whole width.
+  // A peer has a page of its own, and a client is just a tally, so the side
+  // panel is only needed for the network detail.
   const networks = mode === 'networks';
   $('pdetail').hidden = !networks;
   $('peerwrap').classList.toggle('solo', !networks);
@@ -1602,11 +1635,72 @@ function showPeerMode(mode) {
     $('pdetail').replaceChildren(head, el('div', 'body dim',
       'Select a network for its peers and connection behaviour.'));
     showNetworks();
+  } else if (mode === 'agents') {
+    renderNetNote();
+    renderAgents();
   } else {
     renderNetNote();
     renderPeers();
   }
 }
+
+/**
+ * What the peers say they are running.
+ *
+ * A tally rather than a list, because the interesting shape is how many of each
+ * there are. Peers that never named themselves are counted too: on an archive
+ * captured without the P2P message tracepoints and without RPC polls, "none of
+ * them said" is the honest answer rather than an empty table.
+ */
+function renderAgents() {
+  const page = callJson('userAgents', 500);
+  if (!page) return;
+  const needle = $('psearch').value.trim().toLowerCase();
+  const rows = needle
+    ? page.rows.filter((r) => r.userAgent.toLowerCase().includes(needle))
+    : page.rows;
+  $('pcount').textContent = `${num(page.distinct)} clients, ${num(page.named)} of `
+    + `${num(page.peers)} peers named`;
+
+  const table = $('tpeers');
+  if (!page.named) {
+    table.replaceChildren();
+    $('netnote').replaceChildren(note('No peer named itself in this archive.',
+      'A peer’s client string comes from the version message it sends, or from a '
+      + 'getpeerinfo poll. An archive captured without --messages and without the RPC '
+      + 'extractor has neither.'));
+    return;
+  }
+
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [l, c] of [['client', ''], ['peers', 'n'], ['share', 'n'], ['', '']]) {
+    hr.append(el('th', c, l));
+  }
+  thead.append(hr);
+  const tbody = el('tbody');
+  const peak = rows.length ? rows[0].peers : 1;
+  for (const r of rows) {
+    const tr = el('tr');
+    const bar = el('span', 'barcell');
+    bar.style.width = `${Math.max(2, (r.peers / peak) * 100)}%`;
+    bar.style.background = cssVar('--s1');
+    const barCell = el('td');
+    barCell.style.width = '140px';
+    barCell.append(bar);
+    tr.append(td(r.userAgent, 'm'), td(num(r.peers), 'n'),
+              td(`${r.share.toFixed(2)}%`, 'n'), barCell);
+    tbody.append(tr);
+  }
+  if (page.unknown) {
+    const tr = el('tr');
+    tr.append(td('(never named itself)', 'm dim'), td(num(page.unknown), 'n'),
+              td(`${(page.unknown * 100 / page.peers).toFixed(2)}%`, 'n dim'), el('td'));
+    tbody.append(tr);
+  }
+  table.replaceChildren(thead, tbody);
+}
+
 
 
 /* ----------------------------------------------------------------- events */
@@ -2883,12 +2977,16 @@ function setup() {
       refreshEvents();
     }, 180);
   });
-  $('psearch').addEventListener('input', () =>
-    S.peerMode === 'peers' ? paintPeers() : paintNetworks());
+  $("psearch").addEventListener("input", () => {
+    if (S.peerMode === "peers") paintPeers();
+    else if (S.peerMode === "agents") renderAgents();
+    else paintNetworks();
+  });
   $('eview').addEventListener('scroll', refreshEvents, { passive: true });
 
   $('mode-peers').addEventListener('click', () => showPeerMode('peers'));
-  $('mode-nets').addEventListener('click', () => showPeerMode('networks'));
+  $("mode-nets").addEventListener("click", () => showPeerMode("networks"));
+  $("mode-agents").addEventListener("click", () => showPeerMode("agents"));
 
   $('seq-add').addEventListener('change', (e) => {
     if (e.target.value) seqAddPeer(Number(e.target.value));

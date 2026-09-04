@@ -52,6 +52,26 @@ impl LifecycleKind {
     }
 }
 
+/// Where a peer's user agent came from.
+///
+/// The `version` message is what the peer actually put on the wire; the RPC
+/// snapshot is Bitcoin Core repeating it back later. They agree in practice,
+/// but only one of them is first-hand, and an archive often has just one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserAgentSource {
+    Version,
+    PeerInfo,
+}
+
+impl UserAgentSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UserAgentSource::Version => "version",
+            UserAgentSource::PeerInfo => "getpeerinfo",
+        }
+    }
+}
+
 /// How many lifecycle events to keep per peer.
 ///
 /// The peer table is not covered by the event store's retention budget, so
@@ -93,6 +113,12 @@ pub struct PeerStats {
     pub index: u32,
     /// Last address seen for this peer. `None` if only ever seen misbehaving.
     pub addr: Option<String>,
+    /// Interned user agent, resolved with [`PeerTable::user_agent`]. Interned
+    /// because a churning node sees the same few agent strings across hundreds
+    /// of thousands of peers, and a `String` each would cost more than the rest
+    /// of the peer table put together.
+    pub user_agent: Option<u16>,
+    pub user_agent_source: Option<UserAgentSource>,
     pub conn_type: Option<i32>,
     pub network: Option<u32>,
     pub first_seen: u64,
@@ -214,6 +240,8 @@ pub struct PeerTable {
     /// Dense index -> peer id.
     by_index: Vec<u64>,
     durations: ConnectionDurations,
+    user_agents: Vec<String>,
+    user_agent_ids: HashMap<String, u16>,
 }
 
 impl PeerTable {
@@ -242,6 +270,74 @@ impl PeerTable {
         &self.durations
     }
 
+    /// Resolve an interned user agent.
+    pub fn user_agent(&self, id: u16) -> Option<&str> {
+        self.user_agents.get(id as usize).map(String::as_str)
+    }
+
+    /// Every user agent seen, with how many peers reported it, busiest first.
+    pub fn user_agent_counts(&self) -> Vec<(&str, u64)> {
+        let mut counts = vec![0u64; self.user_agents.len()];
+        for peer in self.peers.values() {
+            if let Some(id) = peer.user_agent {
+                if let Some(slot) = counts.get_mut(id as usize) {
+                    *slot += 1;
+                }
+            }
+        }
+        let mut out: Vec<(&str, u64)> = self
+            .user_agents
+            .iter()
+            .map(String::as_str)
+            .zip(counts)
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        out
+    }
+
+    /// Note what a peer calls itself.
+    ///
+    /// The `version` message wins over the RPC snapshot: it is what the peer
+    /// actually sent, and an archive holding both should report the first-hand
+    /// one. Nothing else overwrites an agent already recorded, so the hundreds
+    /// of `getpeerinfo` polls in a long archive cost one hash lookup each.
+    pub fn record_user_agent(&mut self, peer_id: u64, agent: &str, source: UserAgentSource) {
+        if agent.is_empty() {
+            return;
+        }
+        // Only annotate peers already known from their own events: a poll
+        // listing a peer this archive never otherwise saw must not invent one,
+        // nor move an existing peer's first-seen time.
+        let Some(peer) = self.peers.get(&peer_id) else {
+            return;
+        };
+        let upgrading =
+            source == UserAgentSource::Version && peer.user_agent_source != Some(source);
+        if peer.user_agent.is_some() && !upgrading {
+            return;
+        }
+
+        let id = match self.user_agent_ids.get(agent) {
+            Some(id) => *id,
+            None => {
+                let Ok(id) = u16::try_from(self.user_agents.len()) else {
+                    // More than 65,535 distinct agents is not a peer population,
+                    // it is a garbage or adversarial archive. Stop interning
+                    // rather than grow without bound.
+                    return;
+                };
+                self.user_agents.push(agent.to_string());
+                self.user_agent_ids.insert(agent.to_string(), id);
+                id
+            }
+        };
+        if let Some(peer) = self.peers.get_mut(&peer_id) {
+            peer.user_agent = Some(id);
+            peer.user_agent_source = Some(source);
+        }
+    }
+
     /// Peer id for a dense index.
     pub fn peer_id_at(&self, index: u32) -> Option<u64> {
         self.by_index.get(index as usize).copied()
@@ -262,6 +358,16 @@ impl PeerTable {
     /// Record a P2P message. `command` is the interned kind id of `meta.command`.
     pub fn record_message(&mut self, timestamp: u64, event: &MessageEvent, command: u16) {
         let meta = &event.meta;
+        {
+            // An inbound version carries the peer's agent; an outbound one
+            // carries this node's, which is not what the peer page is about.
+            use crate::proto::ebpf_extractor::message::message_event::Msg;
+            if let (true, Some(Msg::Version(version))) = (meta.inbound, &event.msg) {
+                self.entry(meta.peer_id, timestamp);
+                let agent = version.user_agent.clone();
+                self.record_user_agent(meta.peer_id, &agent, UserAgentSource::Version);
+            }
+        }
         let peer = self.entry(meta.peer_id, timestamp);
         if peer.addr.as_deref() != Some(meta.addr.as_str()) {
             peer.addr = Some(meta.addr.clone());

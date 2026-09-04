@@ -8,12 +8,13 @@ use crate::exchange::{self, Tracker};
 use crate::histogram::Histogram;
 use crate::kind::{classify, Group, KindTable};
 use crate::latency::Latencies;
-use crate::peers::PeerTable;
+use crate::peers::{PeerTable, UserAgentSource};
 use crate::proto::{
-    ebpf_extractor::{ebpf::EbpfEvent, message::MessageEvent},
+    ebpf_extractor::{ebpf::EbpfEvent, message::MessageEvent, Ebpf},
     event::event::PeerObserverEvent,
     event::Event,
     header::ArchiveHeader,
+    rpc_extractor::rpc::RpcEvent,
 };
 use crate::relay::Relay;
 use crate::store::{flags, EventStore, NO_PEER};
@@ -421,9 +422,30 @@ impl Ingest<'_> {
 
     /// Update the peer table and return the columns describing this event's peer.
     fn attribute_to_peer(&mut self, event: &Event, timestamp: u64, kind: u16) -> (u32, u8, u32) {
-        let Some(PeerObserverEvent::EbpfExtractor(ebpf)) = &event.peer_observer_event else {
-            return (NO_PEER, 0, 0);
-        };
+        match &event.peer_observer_event {
+            Some(PeerObserverEvent::EbpfExtractor(ebpf)) => {
+                self.attribute_ebpf(ebpf, timestamp, kind)
+            }
+            // A getpeerinfo snapshot is not an event about one peer, but it does
+            // say what each peer calls itself, which is the only source of that
+            // in an archive captured without the P2P message tracepoints.
+            Some(PeerObserverEvent::RpcExtractor(rpc)) => {
+                if let Some(RpcEvent::PeerInfos(infos)) = &rpc.rpc_event {
+                    for info in &infos.infos {
+                        self.analysis.peers.record_user_agent(
+                            u64::from(info.id),
+                            &info.subversion,
+                            UserAgentSource::PeerInfo,
+                        );
+                    }
+                }
+                (NO_PEER, 0, 0)
+            }
+            _ => (NO_PEER, 0, 0),
+        }
+    }
+
+    fn attribute_ebpf(&mut self, ebpf: &Ebpf, timestamp: u64, kind: u16) -> (u32, u8, u32) {
         match &ebpf.ebpf_event {
             Some(EbpfEvent::Message(message)) => {
                 let analysis = &mut *self.analysis;

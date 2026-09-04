@@ -270,18 +270,22 @@ pub fn peers(
         .iter()
         .skip(offset)
         .take(limit)
-        .map(|p| peer_row(p))
+        .map(|p| peer_row(analysis, p))
         .collect();
     json!({ "total": total, "offset": offset, "rows": page })
 }
 
-fn peer_row(peer: &PeerStats) -> Value {
+fn peer_row(analysis: &Analysis, peer: &PeerStats) -> Value {
     json!({
         "peerId": peer.peer_id,
         "index": peer.index,
         "addr": peer.addr,
         "connType": peer.conn_type.map(conn_type_name),
         "network": peer.network.map(network_name),
+        // What the peer calls itself, and which of the two places that came
+        // from -- an archive usually has only one of them.
+        "userAgent": peer.user_agent.and_then(|id| analysis.peers.user_agent(id)),
+        "userAgentFrom": peer.user_agent_source.map(|s| s.as_str()),
         "firstSeen": peer.first_seen,
         "lastSeen": peer.last_seen,
         "durationMs": peer.duration_ms(),
@@ -336,7 +340,7 @@ pub fn peer_detail(analysis: &Analysis, peer_id: u64) -> Value {
         })
         .collect();
 
-    let mut row = peer_row(peer);
+    let mut row = peer_row(analysis, peer);
     if let Some(object) = row.as_object_mut() {
         object.insert("found".into(), Value::Bool(true));
         object.insert("commands".into(), Value::Array(commands));
@@ -541,6 +545,36 @@ fn relay_row(analysis: &Analysis, peer_id: u64, record: &relay::PeerRelay) -> Va
         "duplicate": record.duplicate,
         "duplicateBytes": record.duplicate_bytes,
         "heardToHeldP50Ms": record.heard_to_held.percentile_ms(0.5),
+    })
+}
+
+/// What the peers on this node call themselves, commonest first.
+///
+/// From the `version` messages peers sent where the archive has them, and from
+/// `getpeerinfo` snapshots otherwise. Peers the archive never saw an agent for
+/// are counted separately rather than left out, because "half of them did not
+/// say" is itself the answer on an archive captured without the P2P messages.
+pub fn user_agents(analysis: &Analysis, limit: usize) -> Value {
+    let counts = analysis.peers.user_agent_counts();
+    let named: u64 = counts.iter().map(|(_, n)| n).sum();
+    let peers = analysis.peers.len() as u64;
+    let rows: Vec<Value> = counts
+        .iter()
+        .take(limit)
+        .map(|(agent, count)| {
+            json!({
+                "userAgent": agent,
+                "peers": count,
+                "share": share(*count, peers),
+            })
+        })
+        .collect();
+    json!({
+        "rows": rows,
+        "distinct": counts.len(),
+        "named": named,
+        "unknown": peers.saturating_sub(named),
+        "peers": peers,
     })
 }
 
@@ -1195,5 +1229,5 @@ pub fn network_peers(
         .collect();
     peers.sort_by_key(|p| std::cmp::Reverse(p.events()));
 
-    json!({ "rows": peers.iter().take(limit).map(|p| peer_row(p)).collect::<Vec<_>>() })
+    json!({ "rows": peers.iter().take(limit).map(|p| peer_row(analysis, p)).collect::<Vec<_>>() })
 }

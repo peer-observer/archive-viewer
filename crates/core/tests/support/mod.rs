@@ -250,3 +250,56 @@ pub fn connection_end(
         )),
     }
 }
+
+/// An inbound `version` message, carrying what the peer calls itself.
+pub fn version_event(ts: u64, peer_id: u64, user_agent: &str, inbound: bool) -> Event {
+    use archive_viewer_core::proto::{
+        bitcoin_primitives::{self, Address},
+        ebpf_extractor::message::Version,
+    };
+    let address = || Address {
+        timestamp: 0,
+        port: 8333,
+        services: 0,
+        address: Some(bitcoin_primitives::address::Address::Ipv4(
+            "10.0.0.1".to_string(),
+        )),
+    };
+    let mut event = message_event(ts, peer_id, "version", inbound, 102);
+    set_msg(
+        &mut event,
+        message_event::Msg::Version(Version {
+            version: 70016,
+            services: 1033,
+            timestamp: ts as i64 / 1000,
+            receiver: address(),
+            sender: address(),
+            nonce: 42,
+            user_agent: user_agent.to_string(),
+            start_height: 900_000,
+            relay: true,
+        }),
+    );
+    event
+}
+
+/// An RPC `getpeerinfo` snapshot naming each peer's subversion.
+pub fn peer_infos_event(ts: u64, peers: &[(u32, &str)]) -> Event {
+    use archive_viewer_core::proto::rpc_extractor::{self, PeerInfo, PeerInfos};
+    Event {
+        timestamp: ts,
+        peer_observer_event: Some(event::PeerObserverEvent::RpcExtractor(rpc_extractor::Rpc {
+            rpc_event: Some(rpc_extractor::rpc::RpcEvent::PeerInfos(PeerInfos {
+                infos: peers
+                    .iter()
+                    .map(|(id, subversion)| PeerInfo {
+                        id: *id,
+                        address: format!("10.0.0.{id}:8333"),
+                        subversion: subversion.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            })),
+        })),
+    }
+}

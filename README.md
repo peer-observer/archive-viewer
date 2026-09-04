@@ -102,6 +102,23 @@ Back returns to the list. Routes live only as long as the session does — the
 archive is dropped in rather than fetched, so a reloaded page has nothing to
 show and any route in the URL is ignored on arrival.
 
+The peer list and each peer's page name the client the peer says it is running,
+taken from the `version` message it sent, or from a `getpeerinfo` snapshot where
+the archive has RPC polls but not the P2P messages. The version message wins
+when both are there: it is what the peer actually put on the wire, and the RPC
+poll is Bitcoin Core repeating it back later. The **clients** view on the Peers
+tab tallies them.
+
+Agent strings are interned, which is the difference between a few hundred bytes
+and thirty megabytes: the sample churn archive names 167,919 peers using 242
+distinct strings.
+
+A peer with no client string was usually already connected when the capture
+started, so the handshake that would have named it predates the archive. The
+peer page says so rather than leaving a blank. On the sample archive that
+accounts for 107 of the 130 unnamed peers, and none of the 130 has an inbound
+version message that was somehow missed.
+
 **Activity** — every peer at once: one row per peer, one column per pixel of
 time, a mark for the messages exchanged in each slice. Inbound sits above the
 row's line and outbound below it, shaded by how many (or by how many bytes),

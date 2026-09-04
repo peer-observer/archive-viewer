@@ -1037,3 +1037,107 @@ fn connection_durations_ignore_events_that_cannot_give_a_lifetime() {
     assert_eq!(none["any"], false);
     assert_eq!(none["rows"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn a_peer_is_named_by_its_version_message() {
+    let events = vec![
+        version_event(1_000, 1, "/Satoshi:29.0.0/", true),
+        version_event(1_100, 2, "/Satoshi:28.1.0/", true),
+        version_event(1_200, 3, "/Satoshi:29.0.0/", true),
+        // Outbound version carries this node's own agent, not the peer's.
+        version_event(1_300, 4, "/ThisNode:1.0/", false),
+    ];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("ua.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let one = view::peer_detail(&analysis, 1);
+    assert_eq!(one["userAgent"], "/Satoshi:29.0.0/");
+    assert_eq!(one["userAgentFrom"], "version");
+    assert!(
+        view::peer_detail(&analysis, 4)["userAgent"].is_null(),
+        "an outbound version says nothing about the peer"
+    );
+
+    // Interned once, counted per peer, commonest first.
+    let agents = view::user_agents(&analysis, 10);
+    assert_eq!(agents["distinct"], 2);
+    assert_eq!(agents["named"], 3);
+    assert_eq!(agents["unknown"], 1, "peer 4 never named itself");
+    let rows = agents["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["userAgent"], "/Satoshi:29.0.0/");
+    assert_eq!(rows[0]["peers"], 2);
+    assert_eq!(rows[1]["peers"], 1);
+}
+
+#[test]
+fn getpeerinfo_names_peers_the_version_messages_did_not() {
+    // What an archive captured without the P2P message tracepoints looks like:
+    // the peers are known from connection events, and only the RPC poll says
+    // what they are.
+    let events = vec![
+        connection_event(1_000, 7),
+        connection_event(1_010, 8),
+        peer_infos_event(1_500, &[(7, "/Satoshi:27.0.0/"), (8, "/bcoin:2.2.0/")]),
+        // A later poll repeating itself must not double-count or churn.
+        peer_infos_event(2_500, &[(7, "/Satoshi:27.0.0/"), (8, "/bcoin:2.2.0/")]),
+        // A peer this archive never otherwise saw is not invented from a poll.
+        peer_infos_event(3_500, &[(99, "/Ghost:1.0/")]),
+    ];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("rpc.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    assert_eq!(
+        view::peer_detail(&analysis, 7)["userAgent"],
+        "/Satoshi:27.0.0/"
+    );
+    assert_eq!(
+        view::peer_detail(&analysis, 7)["userAgentFrom"],
+        "getpeerinfo"
+    );
+    assert_eq!(
+        view::peer_detail(&analysis, 8)["userAgent"],
+        "/bcoin:2.2.0/"
+    );
+    assert_eq!(view::peer_detail(&analysis, 99)["found"], false);
+
+    let agents = view::user_agents(&analysis, 10);
+    assert_eq!(agents["distinct"], 2, "the ghost peer interned nothing");
+    assert_eq!(agents["named"], 2);
+    assert_eq!(agents["peers"], 2);
+}
+
+#[test]
+fn a_version_message_wins_over_the_rpc_snapshot() {
+    // Both sources present. The version message is what the peer put on the
+    // wire, so it is the one reported, whichever arrives first.
+    for version_first in [true, false] {
+        let mut events = vec![connection_event(1_000, 5)];
+        let version = version_event(2_000, 5, "/FromTheWire:1/", true);
+        let poll = peer_infos_event(3_000, &[(5, "/FromTheRpc:1/")]);
+        if version_first {
+            events.push(version);
+            events.push(poll);
+        } else {
+            events.push(poll);
+            events.push(version);
+        }
+        let stream = record_stream(&header(1, None), &events);
+        let mut analysis = Analysis::new(BUDGET);
+        analysis.begin_file("both.bin".to_string(), stream.len() as u64);
+        analysis.push(&stream).expect("push");
+        analysis.end_file();
+
+        let detail = view::peer_detail(&analysis, 5);
+        assert_eq!(
+            detail["userAgent"], "/FromTheWire:1/",
+            "version_first={version_first}"
+        );
+        assert_eq!(detail["userAgentFrom"], "version");
+    }
+}

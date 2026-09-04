@@ -159,6 +159,12 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// What the peers on this node call themselves, commonest first.
+    #[wasm_bindgen(js_name = userAgents)]
+    pub fn user_agents(&self, limit: u32) -> String {
+        view::user_agents(&self.analysis, limit as usize).to_string()
+    }
+
     /// How long connections lasted, one distribution per connection type.
     #[wasm_bindgen(js_name = connectionDurations)]
     pub fn connection_durations(&self, ending: &str) -> String {
