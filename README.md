@@ -59,18 +59,24 @@ one you click.
 ### The sequence diagram
 
 On a peer's own page: two lifelines, this node and that peer, arrows for messages
-with direction and size, and connection lifecycle events as notes. A handshake
-reads directly off it:
+with direction and size, connection lifecycle events as notes, and a block of
+activity on the lifeline of whoever is answering a request. A handshake reads
+directly off it:
 
 ```
-06:18:39.503   <- version (123 B)
-06:18:39.504   -> version (102 B)
-06:18:39.506   -> wtxidrelay
-06:18:39.506   -> sendaddrv2
-06:18:39.506   -> verack
-                    119 ms
-06:18:39.625   <- verack
+                     this node            peer
+06:18:39.503             █ <--------------- │   version (123 B)
+06:18:39.504             █ ---------------> █   version (102 B)
+06:18:39.506             █ ---------------> █   wtxidrelay
+06:18:39.506             █ ---------------> █   sendaddrv2
+06:18:39.506             █ ---------------> █   verack
+                               119 ms       █
+06:18:39.625             │ <--------------- █   verack
 ```
+
+This node held a block open from the peer's `version` until it answered with
+`verack`; the peer held one from our `version` across the 119 ms it took to
+answer with its own.
 
 Rows are spaced by how long the node waited, and the wait is written in the band
 it created. A fixed pitch draws a two-second silence exactly like two messages in
@@ -98,13 +104,27 @@ panel where it used to draw 250 and leave the rest empty.
 This is peer-observer issue #397, done in the browser rather than by exporting to
 an external diagram tool.
 
-Requests are linked to the replies they caused. A bracket in the left margin
-spans an exchange — `getaddr` to the `addr` that answers it, `inv` to `getdata`
-to the `tx` it fetched, `version` to `verack`, `ping` to `pong`, `cmpctblock` to
-`getblocktxn` to `blocktxn`, and the BIP157 filter messages — and the reply
-carries how long the peer took. A request answered by many messages, like one
-`getdata` pulling down thirty transactions, gets a single bracket with a tick per
-reply. Hovering either end lights up the whole exchange.
+Requests are linked to the replies they caused, and the link is drawn where a
+sequence diagram draws one: as a block of activity on the lifeline of whoever is
+answering, running from the arrow that asked to the arrow that last answered —
+`getaddr` to the `addr` that answers it, `inv` to `getdata` to the `tx` it
+fetched, `version` to `verack`, `ping` to `pong`, `cmpctblock` to `getblocktxn`
+to `blocktxn`, and the BIP157 filter messages. A request answered by many
+messages, like one `getdata` pulling down thirty transactions, is a single block
+held open until the last of them lands rather than thirty separate marks. Each
+reply arrow also carries the figure, so an exchange reads without measuring it.
+
+Since the rows are already spaced by time, the height of the block is how long
+the answer took. Half of them are a single row -- a `getdata` served straight
+from the mempool -- and the slowest on the sample archive is nearly 1,400 px of
+a peer thinking about it. Every arrow stops five pixels short of a lifeline,
+which is exactly where the edge of a block is, so an arrow meets the block that
+answers it rather than running through it, and the lifelines keep a little air
+around them even on the rows that are part of no exchange at all. Two blocks
+that overlap on the same lifeline step outwards, away from the arrows; that is
+0.1% of them, because Core generally answers one request before the next falls
+due. Hovering any row in an exchange lights the whole of it and names what
+answered what.
 
 These links are inferred, and the view says so. The archive records a message's
 command, direction, size and time, but not the txids, block hashes or ping nonces

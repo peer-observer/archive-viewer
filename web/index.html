@@ -249,12 +249,16 @@ canvas { display: block; width: 100%; }
 /* Keeps a label that is wider than the gap between the lifelines from
    sitting on top of one. */
 .seqsvg .plate { fill: var(--panel); }
-.seqsvg .tie { fill: none; stroke-width: 1.25; stroke-opacity: 0.4; pointer-events: none; }
-.seqsvg .tie.on { stroke-opacity: 1; stroke-width: 2; }
+/* A block of activity on the lifeline that is answering, from the request to
+   the last reply. Filled, because it is a span of time and not a connector,
+   and inert, because the row underneath it is the hover target. */
+.seqsvg .act { fill: var(--panel-2); stroke-width: 1; stroke-opacity: 0.45; pointer-events: none; }
+.seqsvg .act.on { stroke-opacity: 1; stroke-width: 1.5;
+                  fill: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
 .seqsvg .row.tied .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
 .seqsvg .gutter { fill: var(--ink-3); font-size: 10px; }
 .seqsvg .hit { fill: transparent; cursor: pointer; }
-.seqsvg .row:hover .hit { fill: var(--panel-2); }
+.seqsvg .row:hover .hit { fill: color-mix(in srgb, var(--ink) 7%, transparent); }
 .seqsvg .row.on .hit { fill: color-mix(in srgb, var(--accent) 15%, transparent); }
 .seqsvg .note { fill: var(--panel-2); stroke: var(--rule-2); stroke-opacity: 0.6; }
 .seqsvg .notetext { fill: var(--ink-2); font-size: 10px; }
@@ -438,7 +442,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
             <option value="500">500</option>
           </select>
           <label class="dim check"
-                 title="Link each request to the reply it most likely caused">
+                 title="Draw each request as a block of activity on the lifeline that answered it">
             <input type="checkbox" id="pseq-ties" checked> link replies
           </label>
         </div>
@@ -2424,7 +2428,7 @@ function renderExchangeLatency() {
  * it. `head` is the height of the first; the second starts at zero.
  */
 const SEQ = {
-  row: 24, head: 46, gutter: 168, minLane: 190, pad: 12, tie: 9, tieDepth: 6,
+  row: 24, head: 46, gutter: 168, minLane: 190, pad: 12,
   // Rows are spaced by how long the node waited between messages. A fixed pitch
   // draws a two-second silence exactly like two messages in the same
   // millisecond, which is the one thing a sequence diagram is for.
@@ -2437,6 +2441,14 @@ const SEQ = {
   // needs room for the figure that labels it; a ceiling, because a peer that
   // went quiet for an hour must not push the next message off the page.
   minGapMs: 10, minGap: 11, gapScale: 2.2, maxGap: 40,
+  // An exchange is drawn where a sequence diagram draws one: as a block of
+  // activity on the lifeline of whoever is answering, running from the request
+  // to the last reply. `bar` is its half-width, and it is also how far short of
+  // a lifeline every arrow stops -- so the padding is there whether or not a
+  // block is, and an arrow always meets a block's edge rather than crossing it.
+  // `nest` steps a block outwards, away from the arrows, when it overlaps one
+  // already on that lifeline; `nestMax` is how many steps before they share.
+  bar: 5, nest: 4, nestMax: 3, minBlock: 10,
 };
 
 
@@ -2458,35 +2470,41 @@ const seqLimit = () => Number($("pseq-limit").value);
 
 
 /**
- * Collect ties into one bracket per request, and give each bracket a nesting
- * depth so that two whose spans overlap never draw on the same line.
+ * Collect ties into one block of activity per request, put each on the lifeline
+ * that answered it, and nest the ones whose spans overlap so that two blocks on
+ * the same lifeline never draw on top of each other.
  *
  * Grouping by request matters: a single `getdata` is answered by every `tx` it
- * asked for, and drawing those as separate brackets would stack a hundred of
- * them from the same row. One bracket with a tick per reply says the same thing
- * in one column.
+ * asked for, and drawing those as separate blocks would stack a hundred of them
+ * from the same row. One block, held open until the last reply, says the same
+ * thing in the space of one.
  */
-function exchangeBrackets(ties) {
+function exchangeBlocks(ties, rows) {
   const byRequest = new Map();
   for (const tie of ties) {
-    const group = byRequest.get(tie.request)
+    const block = byRequest.get(tie.request)
       ?? { request: tie.request, replies: [], last: tie.request };
-    group.replies.push(tie);
-    group.last = Math.max(group.last, tie.reply);
-    byRequest.set(tie.request, group);
+    block.replies.push(tie);
+    block.last = Math.max(block.last, tie.reply);
+    byRequest.set(tie.request, block);
   }
 
-  const brackets = [...byRequest.values()].sort((a, b) => a.request - b.request || a.last - b.last);
-  const open = [];
-  for (const bracket of brackets) {
-    let depth = open.findIndex((end) => end < bracket.request);
-    // Deeper than the diagram has room for: share the outermost column rather
-    // than pushing every row further right.
-    if (depth === -1) depth = Math.min(open.length, SEQ.tieDepth - 1);
-    open[depth] = bracket.last;
-    bracket.depth = depth;
+  const blocks = [...byRequest.values()].sort((a, b) => a.request - b.request || a.last - b.last);
+  // Whoever the request was addressed to is the one doing the work, so a
+  // request that came in is answered on this node's lifeline and one that went
+  // out on the peer's. Each lifeline nests on its own.
+  const open = [[], []];
+  for (const block of blocks) {
+    block.side = rows[block.request].inbound === true ? 0 : 1;
+    const lane = open[block.side];
+    let depth = lane.findIndex((end) => end < block.request);
+    // Deeper than the diagram has room for: share the outermost step rather
+    // than walking further and further off the lifeline.
+    if (depth === -1) depth = Math.min(lane.length, SEQ.nestMax - 1);
+    lane[depth] = block.last;
+    block.depth = depth;
   }
-  return brackets;
+  return blocks;
 }
 
 function drawSequence() {
@@ -2532,15 +2550,20 @@ function drawSequence() {
     svgNode.setAttribute('viewBox', `0 0 ${ctx.width} ${height}`);
   }
 
+  // Drawing order is stacking order: lifelines at the bottom, then the blocks
+  // of activity that sit on them, then the plates that knock both out from
+  // under a label, and the rows themselves on top.
   seqHeaders(head, ctx);
+  seqLifelines(node, ctx);
+  seqBlocks(node, ctx);
   const rowEls = seqRows(node, ctx);
-  seqBrackets(node, ctx, rowEls);
+  seqFocus(ctx, rowEls);
 
-  if (ctx.brackets.length) {
+  if (ctx.blocks.length) {
     // One line, not a banner: the caveat is worth stating but it is the same
     // caveat on every draw. The rest of it is on the toggle's tooltip.
     const caption = el('div', 'dim',
-      `${num(ctx.ties.length)} replies linked to ${num(ctx.brackets.length)} requests, `
+      `${num(ctx.ties.length)} replies linked to ${num(ctx.blocks.length)} requests, `
       + 'inferred from command, direction and timing rather than from txids.');
     caption.style.margin = '0 0 6px';
     note.append(caption);
@@ -2549,25 +2572,21 @@ function drawSequence() {
 
 /**
  * Everything the drawing steps below need: the page, the geometry, and the
- * exchange brackets that decide how wide the left gutter has to be.
+ * blocks of activity the exchanges on this page work out to.
  */
 function seqLayout(page) {
   // Exchanges are matched within the page, so a request answered on the next
-  // screenful simply has no bracket. Turning them off is worth having: on a
-  // busy peer nearly every row takes part in one.
+  // screenful simply has no block. Turning them off is worth having: on a busy
+  // peer nearly every row takes part in one.
   const ties = $('pseq-ties').checked ? (page.ties ?? []) : [];
-  const brackets = exchangeBrackets(ties);
-  const tieWidth = brackets.length
-    ? 10 + (Math.max(...brackets.map((b) => b.depth)) + 1) * SEQ.tie
-    : 0;
-  const gutter = SEQ.gutter + tieWidth;
+  const blocks = exchangeBlocks(ties, page.rows);
 
   // Two lanes share whatever the panel has, rather than sitting at a fixed
   // width with dead space beside them. Wider lanes mean longer arrows and more
   // room for a label between them.
-  const room = ($('pseq-scroll').clientWidth || 900) - gutter - SEQ.pad;
+  const room = ($('pseq-scroll').clientWidth || 900) - SEQ.gutter - SEQ.pad;
   const lane = Math.max(SEQ.minLane, Math.floor(room / 2));
-  const laneX = (i) => gutter + lane * i + lane / 2;
+  const laneX = (i) => SEQ.gutter + lane * i + lane / 2;
 
   // Where each row sits, and how much empty band precedes it.
   const tops = [];
@@ -2587,8 +2606,12 @@ function seqLayout(page) {
   }
 
   return {
-    page, ties, brackets, tieWidth, gutter, lane, laneX, gaps,
-    width: gutter + lane * 2 + SEQ.pad,
+    page, ties, blocks, lane, laneX, gaps,
+    // The peer's lane has room to its right and this node's has the gutter to
+    // its left, so nested blocks step outwards into that rather than inwards
+    // into the arrows, which keeps every arrow ending at the same place.
+    blockX: (side, depth) => laneX(side) + (side === 0 ? -1 : 1) * depth * SEQ.nest,
+    width: SEQ.gutter + lane * 2 + SEQ.pad,
     height: y + SEQ.pad,
     rowY: (i) => tops[i] + SEQ.row / 2,
     nodeX: laneX(0),
@@ -2604,14 +2627,14 @@ function seqLayout(page) {
 
 /** The sticky part: column headings, and an actor box per lifeline. */
 function seqHeaders(head, ctx) {
-  const { page, laneX, lane, tieWidth, gutter, colour } = ctx;
+  const { page, laneX, lane, colour } = ctx;
 
   // The date lives here, once, so each row needs only a time of day.
   const days = [...new Set(page.rows.map((r) => utc(r.timestamp, false).slice(0, 10)))];
   head.append(
-    svgText({ class: 'headsub', x: tieWidth + 10, y: 22 },
+    svgText({ class: 'headsub', x: 10, y: 22 },
       days.length > 1 ? `${days[0]} → ${days.at(-1)}` : days[0]),
-    svgText({ class: 'headsub', x: tieWidth + 10, y: 34 }, 'UTC'),
+    svgText({ class: 'headsub', x: 10, y: 34 }, 'UTC'),
   );
 
   const peer = S.peerRows.find((p) => p.peerId === S.seq.peer);
@@ -2646,24 +2669,62 @@ function seqHeaders(head, ctx) {
 }
 
 
-/** One row per message, returned so the brackets can light them up. */
-function seqRows(node, ctx) {
-  const { page, tieWidth, width, height, rowY, nodeX, peerX, colour } = ctx;
-
-  // The lifelines run the whole height of the scrolling part; the header holds
-  // only a stub of each, to join up with these when it is stuck at the top.
-  for (const [x, lineColour] of [[nodeX, null], [peerX, colour]]) {
-    const life = svg("line", { class: "life", x1: x, y1: 0, x2: x, y2: height });
+/**
+ * The two lifelines, running the whole height of the scrolling part. The header
+ * holds only a stub of each, to join up with these when it is stuck at the top.
+ */
+function seqLifelines(node, ctx) {
+  for (const [x, lineColour] of [[ctx.nodeX, null], [ctx.peerX, ctx.colour]]) {
+    const life = svg('line', { class: 'life', x1: x, y1: 0, x2: x, y2: ctx.height });
     if (lineColour) {
       life.style.stroke = lineColour;
-      life.style.strokeOpacity = "0.5";
+      life.style.strokeOpacity = '0.5';
     }
     node.append(life);
   }
+}
+
+
+/**
+ * One block of activity per exchange, on the lifeline that answered it: from
+ * the arrow that asked to the arrow that last answered. Its height is how long
+ * the answer took, because the rows are already spaced by time -- a `getdata`
+ * served from the mempool is one row tall, and one the peer sat on for a second
+ * is a block you can see from across the room.
+ *
+ * They go in underneath the rows so that a label, a note or a row highlight is
+ * never drawn over by one, and they take no pointer events: the rows are the
+ * hover target, and each row that takes part in an exchange says so.
+ */
+function seqBlocks(node, ctx) {
+  const layer = svg('g');
+  node.append(layer);
+  for (const block of ctx.blocks) {
+    const x = ctx.blockX(block.side, block.depth);
+    const top = ctx.rowY(block.request);
+    const bottom = Math.max(ctx.rowY(block.last), top + SEQ.minBlock);
+    // Held a hair short at both ends, so that the back-to-back exchanges a
+    // transaction-relay peer is made of read as a stack of blocks rather than
+    // as one unbroken column.
+    const rect = svg('rect', {
+      class: 'act', x: x - SEQ.bar, y: top + 1,
+      width: SEQ.bar * 2, height: bottom - top - 2, rx: 2,
+    });
+    rect.style.stroke = ctx.colour;
+    layer.append(rect);
+    block.el = rect;
+  }
+}
+
+
+/** One row per message, returned so the exchanges can light them up. */
+function seqRows(node, ctx) {
+  const { page, width, rowY, peerX, colour } = ctx;
 
   // Label plates go in their own layer, under every row: they knock the
-  // lifelines out from under a label, but must stay below the row hover fill,
-  // which would otherwise show a pale rectangle behind each label.
+  // lifelines and the blocks out from under a label, but must stay below the
+  // row hover fill, which would otherwise show a pale rectangle behind each
+  // label.
   const plates = svg('g');
   node.append(plates);
 
@@ -2675,8 +2736,7 @@ function seqRows(node, ctx) {
     g.append(svg('rect', { class: 'hit', x: 0, y: y - SEQ.row / 2, width, height: SEQ.row }));
 
     // The gutter carries a time of day; the date is in the column header.
-    g.append(svgText({ class: "gutter", x: tieWidth + 10, y: y + 3.5 },
-      utc(r.timestamp).slice(11)));
+    g.append(svgText({ class: "gutter", x: 10, y: y + 3.5 }, utc(r.timestamp).slice(11)));
 
     if (r.group === 'connection') {
       // Lifecycle events are not an exchange, so they are a note on the peer's
@@ -2717,8 +2777,12 @@ function seqRows(node, ctx) {
 /** One message as an arrow between the two lifelines, with its label. */
 function seqArrow(g, plates, ctx, r, i, y) {
   const inbound = r.inbound === true;
-  const from = inbound ? ctx.peerX : ctx.nodeX;
-  const to = inbound ? ctx.nodeX : ctx.peerX;
+  // Every arrow stops `bar` short of a lifeline at both ends, which is where a
+  // block of activity's edge is. So an arrow meets the block that answers it
+  // instead of running through it, and the lifelines keep a little air around
+  // them even on the rows that are part of no exchange at all.
+  const from = inbound ? ctx.peerX - SEQ.bar : ctx.nodeX + SEQ.bar;
+  const to = inbound ? ctx.nodeX + SEQ.bar : ctx.peerX - SEQ.bar;
   const dir = Math.sign(to - from) || 1;
   const end = to - dir * 5;
   g.append(
@@ -2752,48 +2816,50 @@ function seqArrow(g, plates, ctx, r, i, y) {
 
 
 /**
- * Exchange brackets, drawn last so a hovered row's highlight does not cover
- * them. They take no pointer events of their own: the rows drive the focus.
+ * Tie the rows to the blocks: hovering either end of an exchange lights the
+ * block and every row in it, and says in a tooltip what answered what.
+ *
+ * A row can be in two exchanges at once -- a `getdata` answers an `inv` and
+ * asks for a transaction in the same breath -- so both the highlight and the
+ * tooltip take a list.
  */
-function seqBrackets(node, ctx, rowEls) {
-  const { page, brackets, rowY, colour } = ctx;
-  const bracketAt = new Map();
-  for (const bracket of brackets) {
-    const x = 8 + bracket.depth * SEQ.tie;
-    // The spine runs from the request to the last reply, with a tick out to
-    // each reply along the way.
-    const spine = `M ${x + 5} ${rowY(bracket.request)} H ${x} V ${rowY(bracket.last)}`;
-    const ticks = bracket.replies.map((tie) => ` M ${x} ${rowY(tie.reply)} H ${x + 5}`).join('');
-    const path = svg('path', { class: 'tie', d: spine + ticks });
-    path.style.stroke = colour;
+function seqFocus(ctx, rowEls) {
+  const partOf = new Map();
+  const add = (row, block) => {
+    if (!partOf.has(row)) partOf.set(row, []);
+    partOf.get(row).push(block);
+  };
+  for (const block of ctx.blocks) {
+    add(block.request, block);
+    for (const tie of block.replies) add(tie.reply, block);
+  }
 
-    const request = page.rows[bracket.request].kind;
-    const answers = bracket.replies.map((tie) => page.rows[tie.reply].kind);
-    const spread = bracket.replies.map((tie) => tie.elapsedMs);
-    const tip = svg('title');
-    tip.textContent = answers.length === 1
+  const describe = (block) => {
+    const request = ctx.page.rows[block.request].kind;
+    const answers = block.replies.map((tie) => ctx.page.rows[tie.reply].kind);
+    const spread = block.replies.map((tie) => tie.elapsedMs);
+    return answers.length === 1
       ? `${request} → ${answers[0]}, ${dur(spread[0])}`
       : `${request} → ${answers.length} replies, `
         + `${dur(Math.min(...spread))} to ${dur(Math.max(...spread))}`;
-    path.append(tip);
-    node.append(path);
-
-    for (const position of [bracket.request, ...bracket.replies.map((t) => t.reply)]) {
-      if (!bracketAt.has(position)) bracketAt.set(position, []);
-      bracketAt.get(position).push({ bracket, path });
-    }
-  }
-
-  const focus = (position, on) => {
-    for (const { bracket, path } of bracketAt.get(position) ?? []) {
-      path.classList.toggle('on', on);
-      rowEls[bracket.request]?.classList.toggle('tied', on);
-      for (const tie of bracket.replies) rowEls[tie.reply]?.classList.toggle('tied', on);
-    }
   };
-  for (const position of bracketAt.keys()) {
-    rowEls[position]?.addEventListener('mouseenter', () => focus(position, true));
-    rowEls[position]?.addEventListener('mouseleave', () => focus(position, false));
+
+  for (const [row, blocks] of partOf) {
+    const g = rowEls[row];
+    if (!g) continue;
+    const tip = svg('title');
+    tip.textContent = blocks.map(describe).join('\n');
+    g.append(tip);
+
+    const focus = (on) => {
+      for (const block of blocks) {
+        block.el?.classList.toggle('on', on);
+        rowEls[block.request]?.classList.toggle('tied', on);
+        for (const tie of block.replies) rowEls[tie.reply]?.classList.toggle('tied', on);
+      }
+    };
+    g.addEventListener('mouseenter', () => focus(true));
+    g.addEventListener('mouseleave', () => focus(false));
   }
 }
 
