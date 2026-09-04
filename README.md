@@ -59,9 +59,9 @@ one you click.
 ### The sequence diagram
 
 On a peer's own page: two lifelines, this node and that peer, arrows for messages
-with direction and size, connection lifecycle events as notes, and a block of
-activity on the lifeline of whoever is answering a request. A handshake reads
-directly off it:
+with direction, size and what they carried, connection lifecycle events as notes,
+and a block of activity on the lifeline of whoever is answering a request. A
+handshake, and the transaction relay that follows it, read directly off it:
 
 ```
                      this node            peer
@@ -72,11 +72,19 @@ directly off it:
 06:18:39.506             █ ---------------> █   verack
                                119 ms       █
 06:18:39.625             │ <--------------- █   verack
+
+06:19:02.114             █ <--------------- │   inv 1.1 kB · 33 wtx
+06:19:02.115             █ ---------------> █   getdata 1.1 kB · 33 witness tx
+06:19:02.240             │ <--------------- │   addrv2 402 B · 10 addresses
+06:19:02.318             │ <--------------- █   tx 372 B ↩ 203 ms
+06:19:02.319             │ <--------------- █   tx 1.1 kB ↩ 204 ms
 ```
 
 This node held a block open from the peer's `version` until it answered with
 `verack`; the peer held one from our `version` across the 119 ms it took to
-answer with its own.
+answer with its own, and another from our `getdata` until the transactions came
+back. The `addrv2` in the middle of that is no part of the exchange, so the block
+is notched around it and its arrow meets a bare lifeline.
 
 Rows are spaced by how long the node waited, and the wait is written in the band
 it created. A fixed pitch draws a two-second silence exactly like two messages in
@@ -131,14 +139,35 @@ that overlap on the same lifeline step outwards, away from the arrows; that is
 due. Hovering any row in an exchange lights the whole of it and names what
 answered what.
 
-These links are inferred, and the view says so. The archive records a message's
-command, direction, size and time, but not the txids, block hashes or ping nonces
-inside it, so a tie is the nearest matching unanswered request rather than a
+A message that lands inside a block's span but is no part of the exchange — an
+`addrv2` arriving while the peer is still working through a `getdata`, or a `tx`
+answering a different one — cuts a notch in the block rather than being swallowed
+by it. The notch is where the lifeline shows through, so that row's arrow ends
+exactly as an arrow on an idle lifeline does. On the sample archive 0.9% of
+blocks are notched, and what does the interrupting is mostly `tx` for another
+`getdata`, then `inv`, `getdata`, `ping` and `addrv2`.
+
+These links are inferred, and the view says so. **The pairing is by command,
+direction and timing — it does not look at the txids.** The archive does carry
+them: an `inv` holds every hash it announced and a `tx` the whole transaction.
+What it does not have is anything reading them while aggregating, because that
+would mean decoding two and a half million payloads and holding a hash-to-request
+table over the whole capture, for a matcher whose answer is nearly always the
+obvious one. So a tie is the nearest matching unanswered request rather than a
 proven pairing. It is as good as certain for the handshake, for pings and for the
 BIP157 messages, which are only ever sent in reply to something; it can mislink
 where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
 `cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
 a page boundary is not drawn. The toggle in the toolbar turns them off.
+
+Every arrow says what its message carried, where the size does not already say
+it: how many of each inventory type an `inv`, `getdata` or `notfound` names, how
+many addresses an `addr` or `addrv2` gossips, how many headers, short ids,
+indexes or transactions the block messages hold. That is decoded from the
+retained bytes for the hundred rows on the page rather than during ingest, and
+costs about a millisecond a page. On the sample archive it is what shows that
+this node asks with `witness tx` where its peers announce with `wtx` — 4,447
+`getdata` against 163 — which is not visible from the command name alone.
 
 **Peer** — a page for one peer, reached by clicking it anywhere it appears. Its
 own conversation as a raster, then its message sequence diagram, which is what
@@ -256,9 +285,13 @@ in each direction. Selecting a row shows that kind's reply times.
 ### What the request/reply numbers do and do not mean
 
 Requests are paired with replies by command, direction and timing. The archive
-records no txids, block hashes or ping nonces, so a pairing is the nearest
-matching unanswered request rather than a proven one, and three things follow
-that the views state rather than paper over:
+does carry the txids, block hashes and ping nonces — an `inv` holds every hash it
+announced — but nothing reads them while aggregating, since that would mean
+decoding every payload in the archive and keeping a hash-to-request table across
+the whole capture. So a pairing is the nearest matching unanswered request rather
+than a proven one, and three things follow that the views state rather than paper
+over:
+
 
 - **An announcement is not a request.** A node asks for a fraction of what it is
   told about, so an `inv` with no `getdata` after it is a choice, not a failure.

@@ -2692,10 +2692,11 @@ function exchangeCaveats(rows) {
       + 'The producing run captured only some message types, and the header does not record '
       + 'which, so those requests only look unanswered.');
   }
-  lines.push('Requests are paired with replies by command, direction and timing — the archive '
-    + 'records no txids or ping nonces. “Unclear” is requests whose fate could not be '
-    + 'established, which is where Bitcoin Core keeps several in flight at once and a later '
-    + 'one says nothing about an earlier one.');
+  lines.push('Requests are paired with replies by command, direction and timing. The archive '
+    + 'does carry the txids and ping nonces, but nothing reads them while aggregating: that '
+    + 'would mean decoding every payload in the archive. “Unclear” is requests whose fate '
+    + 'could not be established, which is where Bitcoin Core keeps several in flight at once '
+    + 'and a later one says nothing about an earlier one.');
   if (rows.some((r) => r.optional)) {
     lines.push('An announcement (inv, cmpctblock) is not a request: this node acts on a fraction '
       + 'of what it is told about, so those are never counted as unanswered.');
@@ -2785,7 +2786,12 @@ const SEQ = {
   // block is, and an arrow always meets a block's edge rather than crossing it.
   // `nest` steps a block outwards, away from the arrows, when it overlaps one
   // already on that lifeline; `nestMax` is how many steps before they share.
-  bar: 5, nest: 4, nestMax: 3, minBlock: 10,
+  //
+  // A message that lands inside a block's span but is no part of the exchange
+  // cuts a `notch` in it, wide enough to clear an arrow and its head, so the
+  // lifeline shows through where that arrow meets it. A piece of block left
+  // shorter than `minPiece` is dropped rather than drawn as a speck.
+  bar: 5, nest: 4, nestMax: 3, minBlock: 10, notch: 12, minPiece: 6,
 };
 
 
@@ -2903,7 +2909,7 @@ function drawSequence() {
     // caveat on every draw. The rest of it is on the toggle's tooltip.
     const caption = el('div', 'dim',
       `${num(ctx.ties.length)} replies linked to ${num(ctx.blocks.length)} requests, `
-      + 'inferred from command, direction and timing rather than from txids.');
+      + 'paired by command, direction and timing rather than by the txids the archive carries.');
     caption.style.margin = '0 0 6px';
     note.append(caption);
   }
@@ -3031,6 +3037,13 @@ function seqLifelines(node, ctx) {
  * served from the mempool is one row tall, and one the peer sat on for a second
  * is a block you can see from across the room.
  *
+ * A message that lands inside the span but is no part of the exchange -- an
+ * `addrv2` arriving while the peer is still working through a `getdata`, which
+ * happens all the time -- cuts a notch in the block rather than being swallowed
+ * by it. The notch is where the lifeline shows through, so that row's arrow
+ * ends exactly as an arrow on an idle lifeline does, and the eye can tell in one
+ * look which of the messages crossing a block belong to it.
+ *
  * They go in underneath the rows so that a label, a note or a row highlight is
  * never drawn over by one, and they take no pointer events: the rows are the
  * hover target, and each row that takes part in an exchange says so.
@@ -3042,17 +3055,39 @@ function seqBlocks(node, ctx) {
     const x = ctx.blockX(block.side, block.depth);
     const top = ctx.rowY(block.request);
     const bottom = Math.max(ctx.rowY(block.last), top + SEQ.minBlock);
+    const group = svg('g', { class: 'act' });
+    group.style.stroke = ctx.colour;
     // Held a hair short at both ends, so that the back-to-back exchanges a
     // transaction-relay peer is made of read as a stack of blocks rather than
     // as one unbroken column.
-    const rect = svg('rect', {
-      class: 'act', x: x - SEQ.bar, y: top + 1,
-      width: SEQ.bar * 2, height: bottom - top - 2, rx: 2,
-    });
-    rect.style.stroke = ctx.colour;
-    layer.append(rect);
-    block.el = rect;
+    for (const [from, to] of blockSegments(ctx, block, top + 1, bottom - 1)) {
+      group.append(svg('rect', {
+        x: x - SEQ.bar, y: from, width: SEQ.bar * 2, height: to - from, rx: 2,
+      }));
+    }
+    layer.append(group);
+    block.el = group;
   }
+}
+
+/**
+ * Split a block's span at every row inside it that is not its own, and drop any
+ * piece too small to read as a block. A block with nothing crossing it comes
+ * back as the single piece it started as.
+ */
+function blockSegments(ctx, block, top, bottom) {
+  const mine = new Set([block.request, ...block.replies.map((tie) => tie.reply)]);
+  const segments = [];
+  let from = top;
+  for (let r = block.request + 1; r < block.last; r++) {
+    if (mine.has(r)) continue;
+    const cut = ctx.rowY(r);
+    if (cut - SEQ.notch / 2 - from >= SEQ.minPiece) segments.push([from, cut - SEQ.notch / 2]);
+    from = cut + SEQ.notch / 2;
+  }
+  if (bottom - from >= SEQ.minPiece) segments.push([from, bottom]);
+  // Everything was notched away: keep the ends, so the exchange is still drawn.
+  return segments.length ? segments : [[top, Math.max(bottom, top + SEQ.minPiece)]];
 }
 
 
@@ -3133,21 +3168,26 @@ function seqArrow(g, plates, ctx, r, i, y) {
   );
 
   const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
+  // What the message carried, where its size does not already say: how many of
+  // each inventory type an `inv` or `getdata` names, how many addresses an
+  // `addrv2` gossips, how many headers a `headers` holds.
+  const detail = r.detail ? ` · ${r.detail}` : '';
   const elapsed = ctx.elapsedOf.has(i) ? ` ↩ ${dur(ctx.elapsedOf.get(i))}` : '';
   const cx = (from + to) / 2;
   // A label wider than the gap between the lifelines would sit on top of one,
   // so it gets an opaque plate under it. The width comes from the character
   // count rather than `getBBox`, which reports nothing while the tab is hidden;
   // the diagram is monospaced, so counting is accurate.
-  const plateWidth = (main + elapsed).length * 6.7 + 8;
+  const plateWidth = (main + detail + elapsed).length * 6.7 + 8;
   plates.append(svg('rect', {
     class: 'plate', x: cx - plateWidth / 2, y: y - 15, width: plateWidth, height: 13, rx: 2,
   }));
 
   const label = svgText({ class: 'label', x: cx, y: y - 5, 'text-anchor': 'middle' }, main);
-  if (elapsed) {
+  for (const extra of [detail, elapsed]) {
+    if (!extra) continue;
     const span = svg('tspan', { class: 'elapsed' });
-    span.textContent = elapsed;
+    span.textContent = extra;
     label.append(span);
   }
   g.append(label);

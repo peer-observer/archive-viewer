@@ -9,6 +9,7 @@ use crate::asn;
 use crate::exchange::{self, match_turns, Turn};
 use crate::kind::{Group, GROUPS};
 use crate::latency::{self, Latencies};
+use crate::payload;
 use crate::peers::{self, LifecycleKind, PeerStats};
 use crate::proto::bitcoin_primitives::ConnType;
 use crate::relay;
@@ -1094,13 +1095,22 @@ pub fn sequence(
     let mut turns = Vec::with_capacity(indices.len());
     let mut rows = Vec::with_capacity(indices.len());
     for &index in &indices {
-        let (Some(row), Some(value)) = (analysis.store.row(index), event_row(analysis, index))
+        let (Some(row), Some(mut value)) = (analysis.store.row(index), event_row(analysis, index))
         else {
             continue;
         };
+        let command = analysis.kinds.get(row.kind).map_or("", |k| k.name.as_str());
+        // What the message carried, for the rows that have something to say
+        // beyond their size. Decoded here rather than during ingest: it is a
+        // page of messages, not the whole archive.
+        if payload::has_detail(command) {
+            if let Some(detail) = payload::message_detail(analysis, index) {
+                value["detail"] = json!(detail);
+            }
+        }
         turns.push(Turn {
             peer: row.peer,
-            command: analysis.kinds.get(row.kind).map_or("", |k| k.name.as_str()),
+            command,
             inbound: row.inbound(),
             timestamp: row.timestamp,
         });

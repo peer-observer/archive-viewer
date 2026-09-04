@@ -18,6 +18,7 @@ pub mod histogram;
 pub mod inspect;
 pub mod kind;
 pub mod latency;
+pub mod payload;
 pub mod peers;
 pub mod proto;
 pub mod relay;
