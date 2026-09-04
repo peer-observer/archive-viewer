@@ -207,3 +207,46 @@ fn set_msg(event: &mut Event, msg: message_event::Msg) {
         }
     }
 }
+
+/// A connection ending, carrying the establishment time Bitcoin Core reports.
+///
+/// `established_s` is a UNIX timestamp in seconds, exactly as the tracepoint
+/// gives it -- not a duration.
+pub fn connection_end(
+    ts: u64,
+    peer_id: u64,
+    conn_type: ConnType,
+    established_s: u64,
+    evicted: bool,
+) -> Event {
+    use archive_viewer_core::proto::ebpf_extractor::connection::{
+        ClosedConnection, EvictedInboundConnection,
+    };
+    let conn = Connection {
+        peer_id,
+        addr: format!("10.0.0.{}:8333", peer_id % 251),
+        conn_type: conn_type as i32,
+        network: 1,
+    };
+    let event = if evicted {
+        connection::connection_event::Event::InboundEvicted(EvictedInboundConnection {
+            conn,
+            time_established: established_s,
+        })
+    } else {
+        connection::connection_event::Event::Closed(ClosedConnection {
+            conn,
+            time_established: established_s,
+        })
+    };
+    Event {
+        timestamp: ts,
+        peer_observer_event: Some(event::PeerObserverEvent::EbpfExtractor(
+            ebpf_extractor::Ebpf {
+                ebpf_event: Some(ebpf_extractor::ebpf::EbpfEvent::Connection(
+                    ConnectionEvent { event: Some(event) },
+                )),
+            },
+        )),
+    }
+}

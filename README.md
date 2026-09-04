@@ -109,6 +109,28 @@ and connection events are vertical ticks spanning the row. Sorted by first
 connection it draws the shape of a node's peer turnover; sorted by traffic it
 puts the peers that matter at the top.
 
+Above the raster, how long connections lasted, one panel per connection type and
+a filter for how they ended. It sits there because it is the raster's own data
+collapsed, and because it is what makes the duration filter underneath it
+legible. On the sample churn archive:
+
+```
+inbound              n=1,210,406   median   580 ms   p90  987 ms   max 243 h
+outbound-full-relay  n=      160   median   1.7 s    p90 16.4 s    max 167 h
+block-relay-only     n=       59   median  43.1 s    p90  1.1 m    max 1.2 m
+```
+
+Small multiples rather than one chart with the types overlaid: the counts differ
+by four orders of magnitude, so a shared vertical scale would flatten every
+panel but the first. The horizontal scale is shared, because where each type's
+mass sits on the same axis of time is the comparison worth making.
+
+Lifetimes come from Bitcoin Core's own account of them -- the close and evict
+tracepoints carry the time the connection was established -- not from the span
+of events this tool happened to see, and they are accumulated during ingest
+because the per-peer lifecycle list is capped and would have thrown most of them
+away.
+
 Peers are filtered by how long they stayed connected, because they have to be:
 the sample archive of a churning node holds 587,383 peers, of which 562 lasted a
 minute. Drawing a row each would be a solid block.

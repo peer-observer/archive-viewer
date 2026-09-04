@@ -8,7 +8,13 @@
 
 /// Buckets. Bucket `i` holds latencies in `[2^i - 1, 2^(i+1) - 1)` ms, and the
 /// last one is an overflow that catches everything slower.
-pub const BUCKETS: usize = 20;
+///
+/// Thirty-two of them reach twenty-five days, which a reply latency never needs
+/// and a connection duration routinely does: a node holds its outbound peers
+/// for as long as it stays up. The unused buckets cost four bytes each and the
+/// views trim empty ones off both ends before drawing, so the range is free to
+/// the reply charts that do not want it.
+pub const BUCKETS: usize = 32;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Latencies {
@@ -137,7 +143,8 @@ mod tests {
         assert_eq!(bucket_of(3), 2);
         assert_eq!(bucket_of(1000), 9);
         // Everything past the last edge lands in the overflow bucket.
-        assert_eq!(bucket_of(1 << 19), BUCKETS - 1);
+        assert_eq!(bucket_of(1 << (BUCKETS - 1)), BUCKETS - 1);
+        assert_eq!(bucket_of((1 << (BUCKETS - 1)) - 2), BUCKETS - 2);
         assert_eq!(bucket_of(u64::MAX), BUCKETS - 1);
 
         // Every bucket's range starts where the previous one ends.

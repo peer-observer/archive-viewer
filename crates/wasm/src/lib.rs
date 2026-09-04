@@ -159,6 +159,12 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// How long connections lasted, one distribution per connection type.
+    #[wasm_bindgen(js_name = connectionDurations)]
+    pub fn connection_durations(&self, ending: &str) -> String {
+        view::connection_durations(&self.analysis, ending).to_string()
+    }
+
     /// One peer's traffic over its own lifetime, inbound against outbound.
     #[wasm_bindgen(js_name = peerTimeline)]
     pub fn peer_timeline(&self, peer_id: f64, max_bins: u32) -> String {

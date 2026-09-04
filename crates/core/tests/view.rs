@@ -945,3 +945,95 @@ fn a_peer_timeline_survives_a_peer_seen_once() {
     assert_eq!(missing["found"], false);
     assert_eq!(missing["count"], 0);
 }
+
+#[test]
+fn connection_durations_split_by_type_and_by_how_they_ended() {
+    use archive_viewer_core::proto::bitcoin_primitives::ConnType;
+
+    // Three inbound connections Core evicted after a second or so, one that
+    // closed after an hour, and an outbound that lasted two hours.
+    let base = 1_700_000_000u64;
+    let ms = |s: u64| s * 1_000;
+    let events = vec![
+        connection_end(ms(base + 1), 1, ConnType::Inbound, base, true),
+        connection_end(ms(base + 2), 2, ConnType::Inbound, base, true),
+        connection_end(ms(base + 4), 3, ConnType::Inbound, base, true),
+        connection_end(ms(base + 3_600), 4, ConnType::Inbound, base, false),
+        connection_end(
+            ms(base + 7_200),
+            5,
+            ConnType::OutboundFullRelay,
+            base,
+            false,
+        ),
+    ];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("conn.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let all = view::connection_durations(&analysis, "all");
+    assert_eq!(all["connections"], 5);
+    assert_eq!(all["any"], true);
+    let rows = all["rows"].as_array().unwrap();
+    let by = |name: &str| rows.iter().find(|r| r["connType"] == name).unwrap();
+
+    let inbound = by("inbound");
+    assert_eq!(inbound["durations"]["count"], 4);
+    assert_eq!(inbound["evicted"], 3);
+    assert_eq!(inbound["closed"], 1);
+    assert_eq!(inbound["durations"]["minMs"], 1_000);
+    assert_eq!(
+        inbound["durations"]["maxMs"], 3_600_000,
+        "an hour, in the wide buckets"
+    );
+
+    let outbound = by("outbound-full-relay");
+    assert_eq!(outbound["durations"]["count"], 1);
+    assert_eq!(outbound["durations"]["maxMs"], 7_200_000);
+
+    // Filtering by ending picks out one population.
+    let evicted = view::connection_durations(&analysis, "evicted");
+    let rows = evicted["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "only inbound connections are evicted");
+    assert_eq!(rows[0]["durations"]["count"], 3);
+    assert_eq!(rows[0]["durations"]["maxMs"], 4_000);
+
+    let closed = view::connection_durations(&analysis, "closed");
+    assert_eq!(closed["connections"], 2);
+
+    // A type this node never had is left out rather than drawn empty.
+    assert!(rows.iter().all(|r| r["connType"] != "feeler"));
+}
+
+#[test]
+fn connection_durations_ignore_events_that_cannot_give_a_lifetime() {
+    use archive_viewer_core::proto::bitcoin_primitives::ConnType;
+
+    // An opening connection has no establishment time, and a close that claims
+    // to have been established in the future must not become a huge duration.
+    let base = 1_700_000_000u64;
+    let events = vec![
+        connection_event(base * 1_000, 1),
+        connection_end(base * 1_000, 2, ConnType::Inbound, base + 10_000, false),
+    ];
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("odd.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+
+    let page = view::connection_durations(&analysis, "all");
+    assert_eq!(page["connections"], 1, "only the close counts");
+    assert_eq!(
+        page["rows"][0]["durations"]["maxMs"], 0,
+        "clamped, not wrapped"
+    );
+
+    // An archive with no connection events at all says so.
+    let empty = Analysis::new(BUDGET);
+    let none = view::connection_durations(&empty, "all");
+    assert_eq!(none["any"], false);
+    assert_eq!(none["rows"].as_array().unwrap().len(), 0);
+}

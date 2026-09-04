@@ -491,6 +491,17 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
         <span style="flex:1"></span>
         <span class="dim" id="acount"></span>
       </div>
+      <div class="p" style="margin-bottom:12px">
+        <div class="h">
+          <span>How long connections lasted</span>
+          <span class="seg">
+            <button id="ad-all" class="on">all</button><button id="ad-closed" title="Connections that ended normally">closed</button><button id="ad-evicted" title="Inbound connections Bitcoin Core dropped to make room">evicted</button>
+          </span>
+          <span class="sp"></span>
+          <span class="dim" id="adur-count"></span>
+        </div>
+        <div class="body" id="adur"></div>
+      </div>
       <div class="p">
         <div class="scroll" id="ascroll" style="max-height:calc(100vh - 190px)">
           <canvas id="act"></canvas>
@@ -1787,6 +1798,64 @@ function jsonNodes(value, depth) {
  */
 const ACT = { row: 11, lane: 3, gap: 1, labels: 168, top: 10, bottom: 24, right: 10 };
 
+/**
+ * How long connections lasted, one panel per connection type.
+ *
+ * Small multiples rather than one chart with five overlaid series: the counts
+ * differ by orders of magnitude -- thousands of inbound connections against ten
+ * outbound ones -- so a shared vertical scale would flatten every panel but the
+ * biggest. The horizontal scale *is* shared, because that is the comparison
+ * worth making: where each type's mass sits on the same axis of time.
+ *
+ * It lives above the raster because it is the raster's own data collapsed, and
+ * because it explains the duration filter underneath it: on a churning node
+ * most connections are gone within a second, which is why drawing a row each
+ * would be pointless.
+ */
+function renderDurations() {
+  const ending = $('ad-closed').classList.contains('on') ? 'closed'
+    : $('ad-evicted').classList.contains('on') ? 'evicted' : 'all';
+  const page = callJson('connectionDurations', ending);
+  const box = $('adur');
+  if (!page) return;
+  box.replaceChildren();
+
+  if (!page.any) {
+    $('adur-count').textContent = '';
+    box.append(el('div', 'dim',
+      'No connection lifetimes in this archive. They come from the close and evict '
+      + 'tracepoints, which carry the time the connection was established; an archive '
+      + 'captured without --connections has none.'));
+    return;
+  }
+  $('adur-count').textContent = `${num(page.connections)} connections`;
+  if (!page.rows.length) {
+    box.append(el('div', 'dim', `No connection ended that way in this archive.`));
+    return;
+  }
+
+  const window = sharedWindow(page.rows.map((r) => r.durations));
+  const cols = el('div', 'cols');
+  cols.style.gridTemplateColumns =
+    `repeat(${Math.min(page.rows.length, 3)}, minmax(0, 1fr))`;
+  for (const row of page.rows) {
+    const panel = el('div');
+    const head = el('div');
+    head.style.cssText = 'font-family:var(--mono);font-size:11px;margin-bottom:2px';
+    head.append(el('span', null, row.connType));
+    if (ending === 'all' && row.evicted) {
+      head.append(el('span', 'dim', `  ${num(row.evicted)} evicted`));
+    }
+    panel.append(head);
+    const chart = el('div');
+    distribution(chart, row.durations, 'none', window);
+    panel.append(chart);
+    cols.append(panel);
+  }
+  box.append(cols);
+}
+
+
 function activitySettings() {
   return {
     sort: $('asort-events').classList.contains('on') ? 'events' : 'first',
@@ -2002,7 +2071,7 @@ function showActivityTip(event) {
  * buckets span sub-millisecond to nine minutes, and a real distribution
  * occupies a handful of them.
  */
-function distribution(box, l, empty) {
+function distribution(box, l, empty, window) {
   box.replaceChildren();
   if (!l || !l.count) {
     box.append(el('div', 'dim', empty));
@@ -2010,7 +2079,7 @@ function distribution(box, l, empty) {
   }
 
   const head = el('div', 'disthead');
-  head.append(el('b', null, `${num(l.count)} replies`));
+  head.append(el('b', null, `${num(l.count)} ${window ? 'connections' : 'replies'}`));
   for (const [label, value] of [['median', l.p50Ms], ['p90', l.p90Ms], ['p99', l.p99Ms],
                                 ['slowest', l.maxMs]]) {
     if (value == null) continue;
@@ -2018,8 +2087,13 @@ function distribution(box, l, empty) {
   }
   box.append(head);
 
-  const first = l.buckets.findIndex((n) => n > 0);
-  const last = l.buckets.length - 1 - [...l.buckets].reverse().findIndex((n) => n > 0);
+  // Empty buckets at either end are trimmed, unless a shared window is given:
+  // panels meant to be compared have to line up, even where one of them has
+  // nothing in a bucket the others do.
+  const first = window ? window.first : l.buckets.findIndex((n) => n > 0);
+  const last = window
+    ? window.last
+    : l.buckets.length - 1 - [...l.buckets].reverse().findIndex((n) => n > 0);
   const peak = Math.max(...l.buckets);
   const chart = el('div', 'dist');
   for (let i = first; i <= last; i++) {
@@ -2027,7 +2101,7 @@ function distribution(box, l, empty) {
     const bar = el('i', n ? null : 'none');
     bar.style.height = `${n ? Math.max(2, (n / peak) * 100) : 1}%`;
     const { lowMs, highMs } = l.edges[i];
-    const range = highMs == null ? `${dur(lowMs)} and slower` : `${dur(lowMs)} to ${dur(highMs)}`;
+    const range = highMs == null ? `${dur(lowMs)} and longer` : `${dur(lowMs)} to ${dur(highMs)}`;
     bar.title = `${range}: ${num(n)}`;
     chart.append(bar);
   }
@@ -2038,6 +2112,19 @@ function distribution(box, l, empty) {
               el('span', null, dur(l.edges[last].lowMs) + (l.edges[last].highMs == null ? '+' : '')));
   box.append(foot);
 }
+
+/** The union of the buckets these distributions actually use. */
+function sharedWindow(list) {
+  let first = Infinity;
+  let last = -Infinity;
+  for (const l of list) {
+    if (!l?.count) continue;
+    first = Math.min(first, l.buckets.findIndex((n) => n > 0));
+    last = Math.max(last, l.buckets.length - 1 - [...l.buckets].reverse().findIndex((n) => n > 0));
+  }
+  return Number.isFinite(first) ? { first, last } : null;
+}
+
 
 function renderRelay() {
   if (!S.session || S.dead) return;
@@ -2732,7 +2819,7 @@ function showRoute(route) {
   if (route.tab === 'events') refreshEvents();
   if (route.tab === 'sequence') { buildSeqPicker(); drawSequence(SEQ_TAB); }
   if (route.tab === 'relay') renderRelay();
-  if (route.tab === 'activity') drawActivity();
+  if (route.tab === "activity") { renderDurations(); drawActivity(); }
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -2847,13 +2934,18 @@ function setup() {
   $("rsearch").addEventListener("input", paintRelay);
 
 
-  for (const [id, group] of [["asort-first", "asort"], ["asort-events", "asort"],
-                             ["aw-count", "aw"], ["aw-bytes", "aw"]]) {
+  for (const [id, group, redraw] of [["asort-first", "asort", drawActivity],
+                                     ["asort-events", "asort", drawActivity],
+                                     ["aw-count", "aw", drawActivity],
+                                     ["aw-bytes", "aw", drawActivity],
+                                     ["ad-all", "ad", renderDurations],
+                                     ["ad-closed", "ad", renderDurations],
+                                     ["ad-evicted", "ad", renderDurations]]) {
     $(id).addEventListener("click", () => {
       for (const b of document.querySelectorAll(`[id^="${group}-"]`)) {
         b.classList.toggle("on", b.id === id);
       }
-      drawActivity();
+      redraw();
     });
   }
   for (const id of ["arows", "amin"]) $(id).addEventListener("change", drawActivity);

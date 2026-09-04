@@ -9,7 +9,7 @@ use crate::asn;
 use crate::exchange::{self, match_turns, Turn};
 use crate::kind::{Group, GROUPS};
 use crate::latency::{self, Latencies};
-use crate::peers::{LifecycleKind, PeerStats};
+use crate::peers::{self, LifecycleKind, PeerStats};
 use crate::proto::bitcoin_primitives::ConnType;
 use crate::relay;
 use crate::store::NO_PEER;
@@ -541,6 +541,45 @@ fn relay_row(analysis: &Analysis, peer_id: u64, record: &relay::PeerRelay) -> Va
         "duplicate": record.duplicate,
         "duplicateBytes": record.duplicate_bytes,
         "heardToHeldP50Ms": record.heard_to_held.percentile_ms(0.5),
+    })
+}
+
+/// How long connections lasted, one distribution per connection type.
+///
+/// Split by how the connection ended as well as by type: `ending` is `closed`,
+/// `evicted`, or anything else for both together. Those are different
+/// populations -- an evicted inbound connection lived for as long as it took
+/// the next one to arrive -- and one curve over both describes neither.
+pub fn connection_durations(analysis: &Analysis, ending: &str) -> Value {
+    let durations = analysis.peers.durations();
+    let rows: Vec<Value> = (0..peers::CONN_TYPES)
+        .map(|slot| {
+            let distribution = match ending {
+                "closed" => durations.closed(slot).clone(),
+                "evicted" => durations.evicted(slot).clone(),
+                _ => durations.all(slot),
+            };
+            json!({
+                "connType": conn_type_name(slot as i32),
+                "closed": durations.closed(slot).count(),
+                "evicted": durations.evicted(slot).count(),
+                "durations": latencies(&distribution),
+            })
+        })
+        // A type this node never had is not a chart with nothing in it.
+        .filter(|row| row["durations"]["count"].as_u64().unwrap_or(0) > 0)
+        .collect();
+
+    let total: u64 = rows
+        .iter()
+        .map(|r| r["durations"]["count"].as_u64().unwrap_or(0))
+        .sum();
+    json!({
+        "rows": rows,
+        "connections": total,
+        "ending": ending,
+        // Nothing at all, as opposed to nothing matching this filter.
+        "any": !durations.is_empty(),
     })
 }
 

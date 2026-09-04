@@ -4,6 +4,7 @@
 //! are only unique within one node run: an archive spanning a restart can reuse
 //! them, and the UI says so.
 
+use crate::latency::Latencies;
 use crate::proto::ebpf_extractor::{
     connection::{connection_event::Event as ConnEvent, Connection, ConnectionEvent},
     message::MessageEvent,
@@ -143,12 +144,76 @@ impl PeerStats {
     }
 }
 
+/// How long connections lasted, by connection type and by how they ended.
+///
+/// Bitcoin Core reports the establishment time on the event that ends a
+/// connection, so this is the node's own account of the lifetime rather than
+/// the span of events this tool happened to see. Accumulated during ingest
+/// because the per-peer lifecycle list is capped: on a churning node the list
+/// would have thrown most of these away.
+///
+/// Kept split by how the connection ended as well as by type, because those are
+/// different populations. An evicted inbound connection lived for as long as it
+/// took the next one to arrive; one that closed normally lived as long as the
+/// peer wanted it to, and averaging them together describes neither.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionDurations {
+    closed: [Latencies; CONN_TYPES],
+    evicted: [Latencies; CONN_TYPES],
+}
+
+/// Slots for `bitcoin_primitives.ConnType`, which is dense from zero.
+pub const CONN_TYPES: usize = 5;
+
+impl ConnectionDurations {
+    fn add(&mut self, ended: &EndedConnection) {
+        let slot = (ended.conn_type.clamp(0, CONN_TYPES as i32 - 1)) as usize;
+        let side = if ended.evicted {
+            &mut self.evicted
+        } else {
+            &mut self.closed
+        };
+        side[slot].add(ended.lifetime_ms);
+    }
+
+    /// Durations for one connection type, for connections that closed normally.
+    pub fn closed(&self, conn_type: usize) -> &Latencies {
+        &self.closed[conn_type.min(CONN_TYPES - 1)]
+    }
+
+    /// Durations for one connection type, for connections Core evicted.
+    pub fn evicted(&self, conn_type: usize) -> &Latencies {
+        &self.evicted[conn_type.min(CONN_TYPES - 1)]
+    }
+
+    /// Both, for one connection type.
+    pub fn all(&self, conn_type: usize) -> Latencies {
+        let mut both = self.closed(conn_type).clone();
+        both.merge(self.evicted(conn_type));
+        both
+    }
+
+    pub fn is_empty(&self) -> bool {
+        (0..CONN_TYPES).all(|i| self.closed(i).is_empty() && self.evicted(i).is_empty())
+    }
+}
+
+/// A connection that ended, as reported by the event that ended it.
+#[derive(Debug, Clone, Copy)]
+pub struct EndedConnection {
+    /// `bitcoin_primitives.ConnType`.
+    pub conn_type: i32,
+    pub evicted: bool,
+    pub lifetime_ms: u64,
+}
+
 /// Accumulates [`PeerStats`] across a whole archive.
 #[derive(Debug, Default)]
 pub struct PeerTable {
     peers: HashMap<u64, PeerStats>,
     /// Dense index -> peer id.
     by_index: Vec<u64>,
+    durations: ConnectionDurations,
 }
 
 impl PeerTable {
@@ -170,6 +235,11 @@ impl PeerTable {
 
     pub fn iter(&self) -> impl Iterator<Item = &PeerStats> {
         self.peers.values()
+    }
+
+    /// How long connections lasted, by type and by how they ended.
+    pub fn durations(&self) -> &ConnectionDurations {
+        &self.durations
     }
 
     /// Peer id for a dense index.
@@ -285,6 +355,23 @@ impl PeerTable {
             existing_connections: existing,
             message,
         });
+
+        // `time_established` is a UNIX timestamp in seconds, not a duration, so
+        // the lifetime is the gap back to it from this event's own millisecond
+        // clock. A connection that reports an establishment time in the future,
+        // or none at all, contributes nothing rather than a wrong zero.
+        let conn_type = conn.map_or(0, |c| c.conn_type);
+        let ended = time_established
+            .map(|seconds| timestamp.saturating_sub(seconds.saturating_mul(1_000)))
+            .filter(|_| matches!(kind, LifecycleKind::Closed | LifecycleKind::InboundEvicted))
+            .map(|lifetime_ms| EndedConnection {
+                conn_type,
+                evicted: kind == LifecycleKind::InboundEvicted,
+                lifetime_ms,
+            });
+        if let Some(ended) = &ended {
+            self.durations.add(ended);
+        }
     }
 }
 
