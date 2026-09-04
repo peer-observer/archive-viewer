@@ -27,6 +27,11 @@ pub struct Turn<'a> {
     /// `None` for events that are not directed messages.
     pub inbound: Option<bool>,
     pub timestamp: u64,
+    /// What the message names on the wire -- inventory hashes, a txid and
+    /// wtxid, a block hash, a ping nonce -- sorted, or empty for a command that
+    /// names nothing and for a caller that has not decoded the payload. See
+    /// [`crate::payload::carried`].
+    pub keys: &'a [u64],
 }
 
 /// A request and the reply it most likely caused, as positions in the slice
@@ -388,24 +393,135 @@ pub fn exchange_count() -> usize {
     EXCHANGES.len()
 }
 
+/// How many requests of one kind are followed at once while pairing a window.
+///
+/// This is the locality the pairing works within. Bitcoin Core will keep up to
+/// a hundred `getdata` in flight with one peer, but a request whose reply has
+/// not arrived within thirty-two further requests of the same kind is one whose
+/// reply is not in this window either, and holding it open only gives a later
+/// reply something wrong to match against.
+const LOCAL_OPEN: usize = 32;
+
+/// A request waiting for its replies.
+#[derive(Debug, Clone)]
+struct Pending {
+    position: usize,
+    timestamp: u64,
+    /// What it asked for, sorted, with each item removed as it is delivered. A
+    /// request whose items have all arrived is finished and stops matching.
+    wanted: Vec<u64>,
+    /// Whether it named anything at all. A `getaddr` names nothing, and must
+    /// not be mistaken for a request whose items have all been delivered.
+    keyed: bool,
+    replies: u32,
+}
+
 /// Tie up requests and replies in one window of the archive.
 ///
 /// Turns must be in archive order. Only this window is considered, so an
 /// exchange straddling the edge of the window is reported as neither a tie nor
 /// an error -- it simply does not appear.
+///
+/// Where both sides name hashes, that is what pairs them: a `tx` answers the
+/// `getdata` that asked for that transaction, not whichever `getdata` was most
+/// recent, and a `pong` answers the `ping` whose nonce it carries. Bitcoin Core
+/// keeps several requests of a kind in flight at once and answers them out of
+/// order, so this is the difference between a diagram that is right and one
+/// that is merely plausible. Where neither side names anything -- `version` and
+/// `verack`, `getaddr` and `addr` -- the oldest unanswered request in the window
+/// is still the answer, as it always was.
+///
+/// A reply that names something no open request asked for is left untied rather
+/// than being attached to the nearest candidate. Its request is outside the
+/// window, and saying so is more use than a wrong line.
 pub fn match_turns(turns: &[Turn<'_>]) -> Vec<Tie> {
-    let mut tracker = Tracker::new();
+    // Peer, exchange, and the direction the request went, as in `Tracker`.
+    let mut open: HashMap<(u32, usize, bool), Vec<Pending>> = HashMap::new();
     let mut ties = Vec::new();
+
     for (position, turn) in turns.iter().enumerate() {
         let (Some(inbound), true) = (turn.inbound, turn.peer != NO_PEER) else {
             continue;
         };
-        let observed = tracker.observe(turn.peer, turn.command, inbound, turn.timestamp, position);
-        if let Some(answered) = observed.answered {
+
+        // Match as a reply before registering as a request: `getdata` both
+        // answers an `inv` and asks for a `tx`, and must not answer itself.
+        let mut best: Option<(usize, usize, bool)> = None; // exchange, slot, by hash
+        for (index, exchange) in EXCHANGES.iter().enumerate() {
+            if !exchange.replies.contains(&turn.command) {
+                continue;
+            }
+            let key = (turn.peer, index, !inbound);
+            let Some(pending) = open.get(&key) else {
+                continue;
+            };
+            for (slot, request) in pending.iter().enumerate() {
+                if turn.timestamp.saturating_sub(request.timestamp) > exchange.window_ms {
+                    continue;
+                }
+                let hashed = request.keyed
+                    && !turn.keys.is_empty()
+                    && turn
+                        .keys
+                        .iter()
+                        .any(|k| request.wanted.binary_search(k).is_ok());
+                // A request that named things and has none left is done; a
+                // reply that names something is only an answer to a request
+                // that asked for it.
+                if !hashed && request.keyed && !turn.keys.is_empty() {
+                    continue;
+                }
+                if !hashed && request.keyed && request.wanted.is_empty() {
+                    continue;
+                }
+                // A hash match beats a guess; among equals, the oldest, so that
+                // pipelined requests are answered in order.
+                let better = match best {
+                    None => true,
+                    Some((other, other_slot, other_hashed)) => {
+                        let other_at = open[&(turn.peer, other, !inbound)][other_slot].timestamp;
+                        (hashed, std::cmp::Reverse(request.timestamp))
+                            > (other_hashed, std::cmp::Reverse(other_at))
+                    }
+                };
+                if better {
+                    best = Some((index, slot, hashed));
+                }
+            }
+        }
+
+        if let Some((index, slot, hashed)) = best {
+            let key = (turn.peer, index, !inbound);
+            let list = open.get_mut(&key).expect("the slot was just found");
+            let request = &mut list[slot];
             ties.push(Tie {
-                request: answered.request,
+                request: request.position,
                 reply: position,
-                elapsed_ms: answered.elapsed_ms,
+                elapsed_ms: turn.timestamp.saturating_sub(request.timestamp),
+            });
+            request.replies += 1;
+            if hashed {
+                request.wanted.retain(|k| !turn.keys.contains(k));
+            }
+            // A single-reply exchange is closed by its answer; a request that
+            // named things is closed when the last of them has come back.
+            if !EXCHANGES[index].multi || (request.keyed && request.wanted.is_empty()) {
+                list.remove(slot);
+            }
+        }
+
+        if let Some(index) = EXCHANGES.iter().position(|e| e.request == turn.command) {
+            let list = open.entry((turn.peer, index, inbound)).or_default();
+            // The locality bound: past this many, the oldest is forgotten.
+            if list.len() >= LOCAL_OPEN {
+                list.remove(0);
+            }
+            list.push(Pending {
+                position,
+                timestamp: turn.timestamp,
+                wanted: turn.keys.to_vec(),
+                keyed: !turn.keys.is_empty(),
+                replies: 0,
             });
         }
     }
@@ -416,7 +532,8 @@ pub fn match_turns(turns: &[Turn<'_>]) -> Vec<Tie> {
 mod tests {
     use super::*;
 
-    /// `(peer, command, inbound, seconds)`.
+    /// `(peer, command, inbound, seconds)`, naming nothing on the wire: these
+    /// exercise the pairing that has only order and timing to go on.
     fn turns(rows: &[(u32, &'static str, bool, u64)]) -> Vec<Turn<'static>> {
         rows.iter()
             .map(|(peer, command, inbound, at)| Turn {
@@ -424,6 +541,21 @@ mod tests {
                 command,
                 inbound: Some(*inbound),
                 timestamp: at * SECOND,
+                keys: &[],
+            })
+            .collect()
+    }
+
+    /// The same, with each message's hashes: `(peer, command, inbound, seconds,
+    /// keys)`. Keys must be sorted, as [`crate::payload::carried`] returns them.
+    fn keyed(rows: &[(u32, &'static str, bool, u64, &'static [u64])]) -> Vec<Turn<'static>> {
+        rows.iter()
+            .map(|(peer, command, inbound, at, keys)| Turn {
+                peer: *peer,
+                command,
+                inbound: Some(*inbound),
+                timestamp: at * SECOND,
+                keys,
             })
             .collect()
     }
@@ -499,13 +631,101 @@ mod tests {
     }
 
     #[test]
-    fn a_later_request_takes_over_from_an_unanswered_one() {
+    fn pipelined_requests_are_answered_oldest_first() {
+        // Two `getdata` in flight and one transaction back, with nothing to
+        // tell them apart: Bitcoin Core answers in order, so the first asked is
+        // the first answered.
         let rows = turns(&[
             (0, "getdata", false, 0),
             (0, "getdata", false, 1),
             (0, "tx", true, 2),
         ]);
-        assert_eq!(pairs(&match_turns(&rows)), vec![(1, 2)]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(0, 2)]);
+    }
+
+    #[test]
+    fn a_reply_goes_to_the_request_that_asked_for_it() {
+        // The same two `getdata`, now naming what they want. The transaction
+        // answers the one that asked for it, not the one that came first.
+        let rows = keyed(&[
+            (0, "getdata", false, 0, &[0xaa]),
+            (0, "getdata", false, 1, &[0xbb]),
+            (0, "tx", true, 2, &[0xbb]),
+            (0, "tx", true, 3, &[0xaa]),
+        ]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(1, 2), (0, 3)]);
+    }
+
+    #[test]
+    fn a_request_stops_matching_once_all_its_items_have_come_back() {
+        // A `getdata` for two transactions is answered by two, and the third
+        // belongs to a request outside this window.
+        let rows = keyed(&[
+            (0, "getdata", false, 0, &[0xaa, 0xbb]),
+            (0, "tx", true, 1, &[0xaa]),
+            (0, "tx", true, 2, &[0xbb]),
+            (0, "tx", true, 3, &[0xcc]),
+        ]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(0, 1), (0, 2)]);
+    }
+
+    #[test]
+    fn a_reply_naming_something_nobody_asked_for_is_left_untied() {
+        // Better an untied row than a line drawn to the wrong request: this
+        // transaction answers a `getdata` from before the window began.
+        let rows = keyed(&[
+            (0, "getdata", false, 0, &[0xaa]),
+            (0, "tx", true, 1, &[0x99]),
+        ]);
+        assert!(match_turns(&rows).is_empty());
+    }
+
+    #[test]
+    fn a_pong_answers_the_ping_whose_nonce_it_carries() {
+        // The one exact identifier in the protocol. Two pings in flight and the
+        // answers arriving in the other order is a case ordering gets wrong and
+        // the nonce gets right.
+        let rows = keyed(&[
+            (0, "ping", false, 0, &[0x1111]),
+            (0, "ping", false, 1, &[0x2222]),
+            (0, "pong", true, 2, &[0x2222]),
+            (0, "pong", true, 3, &[0x1111]),
+        ]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(1, 2), (0, 3)]);
+    }
+
+    #[test]
+    fn an_inv_is_answered_by_the_getdata_that_takes_it_up() {
+        // A node asks for a fraction of what it is told about, and the hashes
+        // say which fraction. The second `inv` is announced and never fetched.
+        let rows = keyed(&[
+            (0, "inv", true, 0, &[0xaa, 0xbb]),
+            (0, "inv", true, 1, &[0xcc]),
+            (0, "getdata", false, 2, &[0xbb]),
+        ]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(0, 2)]);
+    }
+
+    #[test]
+    fn a_request_that_names_nothing_still_pairs_by_order() {
+        // `getaddr` names nothing and `addrv2` answers nothing in particular,
+        // so these are paired the only way they can be.
+        let rows = keyed(&[(0, "getaddr", false, 0, &[]), (0, "addrv2", true, 1, &[])]);
+        assert_eq!(pairs(&match_turns(&rows)), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn only_so_many_requests_are_followed_at_once() {
+        // The locality bound. Past `LOCAL_OPEN` requests of a kind, the oldest
+        // is forgotten rather than kept around for a reply that is not coming.
+        let mut rows: Vec<(u32, &'static str, bool, u64, &'static [u64])> = Vec::new();
+        for i in 0..LOCAL_OPEN as u64 + 1 {
+            rows.push((0, "getdata", false, i, &[]));
+        }
+        rows.push((0, "tx", true, 100, &[]));
+        let ties = match_turns(&keyed(&rows));
+        // The first request is gone, so the second is the oldest still open.
+        assert_eq!(pairs(&ties), vec![(1, LOCAL_OPEN + 1)]);
     }
 
     #[test]
@@ -534,18 +754,21 @@ mod tests {
                 command: "ping",
                 inbound: Some(false),
                 timestamp: 0,
+                keys: &[],
             },
             Turn {
                 peer: 0,
                 command: "inbound",
                 inbound: None,
                 timestamp: 1,
+                keys: &[],
             },
             Turn {
                 peer: NO_PEER,
                 command: "pong",
                 inbound: Some(true),
                 timestamp: 2,
+                keys: &[],
             },
         ];
         assert!(match_turns(&rows).is_empty());

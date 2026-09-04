@@ -65,26 +65,40 @@ handshake, and the transaction relay that follows it, read directly off it:
 
 ```
                      this node            peer
-06:18:39.503             █ <--------------- │   version (123 B)
-06:18:39.504             █ ---------------> █   version (102 B)
+06:18:39.503             █ <--------------- │   version (123 bytes)
+06:18:39.504             █ ---------------> █   version (102 bytes)
 06:18:39.506             █ ---------------> █   wtxidrelay
 06:18:39.506             █ ---------------> █   sendaddrv2
 06:18:39.506             █ ---------------> █   verack
                                119 ms       █
 06:18:39.625             │ <--------------- █   verack
 
-06:19:02.114             █ <--------------- │   inv 1.1 kB · 33 wtx
-06:19:02.115             █ ---------------> █   getdata 1.1 kB · 33 witness tx
-06:19:02.240             │ <--------------- │   addrv2 402 B · 10 addresses
-06:19:02.318             │ <--------------- █   tx 372 B ↩ 203 ms
-06:19:02.319             │ <--------------- █   tx 1.1 kB ↩ 204 ms
+06:19:02.114             █ <--------------- │   inv (33x wtx, 1.1 kB)
+06:19:02.115             █ ---------------> █   getdata (33x witness tx, 1.1 kB)
+06:19:02.240             │ <-------------▒  █   addrv2 (10x address, 402 bytes)
+06:19:02.318             │ <--------------- █   tx (372 bytes) ↩ 203 ms
+06:19:02.319             │ <--------------- █   tx (1.1 kB) ↩ 204 ms
 ```
+
+Colour is direction: inbound and outbound take the same two series colours the
+peer's raster does, so a reader who has looked at one already knows this one.
+Both actors are grey, because a tinted lifeline would compete with the arrows
+for no gain.
 
 This node held a block open from the peer's `version` until it answered with
 `verack`; the peer held one from our `version` across the 119 ms it took to
 answer with its own, and another from our `getdata` until the transactions came
-back. The `addrv2` in the middle of that is no part of the exchange, so the block
-is notched around it and its arrow meets a bare lifeline.
+back. The `addrv2` in the middle of that is no part of either, so it steps out
+into a track of its own -- the dashed box -- and its arrow ends there rather
+than on somebody else's activity.
+
+Two things happening at once on one lifeline get a track each, and so does a
+message that lands inside a block without being part of it. Tracks step inwards,
+towards the arrows, because an arrow ends on the track it belongs to and has to
+reach it without crossing the ones in front. What an arrow lands on is therefore
+what it belongs to. On the sample archive 19% of blocks are a message in a track
+of its own; none needed a third track, so the arrows never lose more than 26 px.
+
 
 Rows are spaced by how long the node waited, and the wait is written in the band
 it created. A fixed pitch draws a two-second silence exactly like two messages in
@@ -117,48 +131,52 @@ to draw 250 and leave the rest empty.
 This is peer-observer issue #397, done in the browser rather than by exporting to
 an external diagram tool.
 
-Requests are linked to the replies they caused, and the link is drawn where a
-sequence diagram draws one: as a block of activity on the lifeline of whoever is
-answering, running from the arrow that asked to the arrow that last answered —
-`getaddr` to the `addr` that answers it, `inv` to `getdata` to the `tx` it
-fetched, `version` to `verack`, `ping` to `pong`, `cmpctblock` to `getblocktxn`
-to `blocktxn`, and the BIP157 filter messages. A request answered by many
-messages, like one `getdata` pulling down thirty transactions, is a single block
-held open until the last of them lands rather than thirty separate marks. Each
-reply arrow also carries the figure, so an exchange reads without measuring it.
+An exchange is drawn where a sequence diagram draws one: as a block of activity
+on the lifeline of whoever is answering, running from the arrow that asked to the
+arrow that last answered — `getaddr` to the `addr` that answers it, `inv` to
+`getdata` to the `tx` it fetched, `version` to `verack`, `ping` to `pong`,
+`cmpctblock` to `getblocktxn` to `blocktxn`, and the BIP157 filter messages. A
+request answered by many messages, like one `getdata` pulling down thirty
+transactions, is a single block held open until the last of them lands rather
+than thirty separate marks. Each reply arrow also carries the figure, so an
+exchange reads without measuring it.
 
 Since the rows are already spaced by time, the height of the block is how long
 the answer took. Half of them are a single row -- a `getdata` served straight
 from the mempool -- and the slowest on the sample archive is nearly 1,400 px of
-a peer thinking about it. Every arrow stops five pixels short of a lifeline,
-which is exactly where the edge of a block is, so an arrow meets the block that
-answers it rather than running through it, and the lifelines keep a little air
-around them even on the rows that are part of no exchange at all. Two blocks
-that overlap on the same lifeline step outwards, away from the arrows; that is
-0.1% of them, because Core generally answers one request before the next falls
-due. Hovering any row in an exchange lights the whole of it and names what
-answered what.
+a peer thinking about it. Hovering any row in an exchange lights the whole of it
+and names what answered what.
 
-A message that lands inside a block's span but is no part of the exchange — an
-`addrv2` arriving while the peer is still working through a `getdata`, or a `tx`
-answering a different one — cuts a notch in the block rather than being swallowed
-by it. The notch is where the lifeline shows through, so that row's arrow ends
-exactly as an arrow on an idle lifeline does. On the sample archive 0.9% of
-blocks are notched, and what does the interrupting is mostly `tx` for another
-`getdata`, then `inv`, `getdata`, `ping` and `addrv2`.
+**Replies are matched to requests by what they name.** A `tx` answers the
+`getdata` that asked for *that transaction*, not whichever `getdata` was most
+recent; a `pong` answers the `ping` whose nonce it carries; a `getdata` answers
+the `inv` that announced the hashes it takes up. Bitcoin Core keeps several
+requests of a kind in flight at once and answers them out of order, so this is
+the difference between a diagram that is right and one that is merely plausible.
+A request that named things is finished when the last of them has come back,
+which is also what ends its block.
 
-These links are inferred, and the view says so. **The pairing is by command,
-direction and timing — it does not look at the txids.** The archive does carry
-them: an `inv` holds every hash it announced and a `tx` the whole transaction.
-What it does not have is anything reading them while aggregating, because that
-would mean decoding two and a half million payloads and holding a hash-to-request
-table over the whole capture, for a matcher whose answer is nearly always the
-obvious one. So a tie is the nearest matching unanswered request rather than a
-proven pairing. It is as good as certain for the handshake, for pings and for the
-BIP157 messages, which are only ever sent in reply to something; it can mislink
-where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
-`cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
-a page boundary is not drawn. The toggle in the toolbar turns them off.
+It works within a window, because that is all it needs: a page of the diagram,
+and at most thirty-two requests of a kind open at once. A reply whose request is
+outside the window is left untied rather than attached to the nearest candidate
+— its block is a track of its own, and an untied row is more use than a wrong
+line. Where neither side names anything — `version` and `verack`, `getaddr` and
+`addr` — the oldest unanswered request in the window is still the answer, and
+that pairing is as good as certain, since those messages are only ever sent in
+reply to something.
+
+Checked against the sample archive over 102 pages: of 5,249 ties drawn, the 5,223
+between two messages that name hashes all share one, read back through the
+protobuf inspector rather than through the matcher. Seven of them are a reply
+timestamped a millisecond *before* its own request — the eBPF ring buffer
+crossing over — which is exactly the case ordering alone gets wrong and a hash
+gets right.
+
+The **Exchanges** view is the exception, and says so: its counts run over the
+whole archive rather than a page, where reading every payload would mean decoding
+two and a half million of them and keeping a hash-to-request table across the
+capture. Those numbers are paired by command, direction and timing alone.
+
 
 Every arrow says what its message carried, where the size does not already say
 it: how many of each inventory type an `inv`, `getdata` or `notfound` names, how

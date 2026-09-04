@@ -8,10 +8,11 @@
 //! here, on demand, for the handful of rows a page of the sequence diagram
 //! actually draws.
 //!
-//! Only messages whose *shape* is worth a word get one. `inv 1.2 kB` says
-//! nothing about whether that was one transaction or forty; `inv 1.2 kB 40 wtx`
-//! does. A `tx` message, on the other hand, is one transaction by definition,
-//! and its size already says how big.
+//! Two things come out of it. A short line for the label, where the size does
+//! not already say it -- `inv (145 bytes)` says nothing about whether that was
+//! one transaction or forty, and `inv (4x wtx, 145 bytes)` does. And the hashes
+//! the message names, so that a reply can be tied to the request that actually
+//! asked for it rather than to whichever request came last.
 
 use crate::analysis::Analysis;
 use crate::proto::{
@@ -23,9 +24,7 @@ use prost::Message;
 
 /// Commands with something to say beyond their size.
 ///
-/// Checked before decoding, so a page full of `tx` messages -- which is what a
-/// relaying peer's page is -- costs nothing at all. The list is exactly the
-/// arms [`describe`] handles.
+/// The list is exactly the arms [`describe`] handles.
 pub fn has_detail(command: &str) -> bool {
     matches!(
         command,
@@ -41,36 +40,27 @@ pub fn has_detail(command: &str) -> bool {
     )
 }
 
-/// Describe one retained message, or `None` if it was not retained, is not a
-/// P2P message, or is one whose size already tells the whole story.
-pub fn message_detail(analysis: &Analysis, index: u32) -> Option<String> {
-    let event = Event::decode(analysis.store.bytes(index)?).ok()?;
-    let PeerObserverEvent::EbpfExtractor(ebpf) = event.peer_observer_event? else {
-        return None;
-    };
-    let EbpfEvent::Message(message) = ebpf.ebpf_event? else {
-        return None;
-    };
-    describe(&message.msg?)
-}
-
 fn describe(msg: &Msg) -> Option<String> {
     match msg {
         Msg::Inv(m) => Some(inventory(&m.items)),
         Msg::Getdata(m) => Some(inventory(&m.items)),
         Msg::Notfound(m) => Some(inventory(&m.items)),
-        Msg::Addr(m) => Some(count(m.addresses.len(), "address", "addresses")),
-        Msg::Addrv2(m) => Some(count(m.addresses.len(), "address", "addresses")),
-        Msg::Headers(m) => Some(count(m.headers.len(), "header", "headers")),
-        Msg::Compactblock(m) => Some(count(m.short_ids.len(), "short id", "short ids")),
-        Msg::Getblocktxn(m) => Some(count(m.tx_indexes.len(), "index", "indexes")),
-        Msg::Blocktxn(m) => Some(count(m.transactions.len(), "transaction", "transactions")),
+        Msg::Addr(m) => Some(times(m.addresses.len(), "address")),
+        Msg::Addrv2(m) => Some(times(m.addresses.len(), "address")),
+        Msg::Headers(m) => Some(times(m.headers.len(), "header")),
+        Msg::Compactblock(m) => Some(times(m.short_ids.len(), "short id")),
+        Msg::Getblocktxn(m) => Some(times(m.tx_indexes.len(), "index")),
+        Msg::Blocktxn(m) => Some(times(m.transactions.len(), "transaction")),
         _ => None,
     }
 }
 
-fn count(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
+/// How many of a thing, the way the labels read: `4x wtx`, `10x address`.
+///
+/// Always the same shape, singular included, so a column of them lines up and
+/// nothing has to carry a plural for every noun in the protocol.
+fn times(n: usize, name: &str) -> String {
+    format!("{n}x {name}")
 }
 
 /// The inventory types in one `inv`, `getdata` or `notfound`, counted.
@@ -113,7 +103,7 @@ fn inventory(items: &[InventoryItem]) -> String {
         .iter()
         .zip(NAMES)
         .filter(|(n, _)| **n > 0)
-        .map(|(n, name)| format!("{n} {name}"))
+        .map(|(n, name)| times(*n, name))
         .collect();
     if parts.is_empty() {
         // A legitimate message: Core sends an empty `inv` for nothing, but an
@@ -121,6 +111,118 @@ fn inventory(items: &[InventoryItem]) -> String {
         return "empty".to_string();
     }
     parts.join(", ")
+}
+
+/// Commands that identify themselves on the wire, and can therefore have a
+/// reply matched to them by what they name rather than by what came next.
+///
+/// `getheaders` is not among them: its locator is a walk back from the tip, not
+/// the hashes of the headers that answer it, so there is nothing to compare.
+pub fn has_keys(command: &str) -> bool {
+    matches!(
+        command,
+        "inv"
+            | "getdata"
+            | "notfound"
+            | "tx"
+            | "block"
+            | "merkleblock"
+            | "cmpctblock"
+            | "getblocktxn"
+            | "blocktxn"
+            | "ping"
+            | "pong"
+    )
+}
+
+/// Everything decoded from one retained message that anything outside this
+/// module wants.
+#[derive(Debug, Default, Clone)]
+pub struct Carried {
+    /// A short line for the label, where the size does not already say it.
+    pub detail: Option<String>,
+    /// What the message names: inventory hashes, a txid and wtxid, a block
+    /// hash, a ping nonce. Sorted, so a reply can be looked up in a request's.
+    pub keys: Vec<u64>,
+}
+
+/// Whether a command is worth decoding at all.
+pub fn worth_decoding(command: &str) -> bool {
+    has_detail(command) || has_keys(command)
+}
+
+/// Decode one retained message for its label and its identifying hashes.
+///
+/// `None` when the event was not retained, is not a P2P message, or is a
+/// command with nothing to say either way. Callers should check
+/// [`worth_decoding`] first, which costs a string comparison instead of a
+/// protobuf decode.
+pub fn carried(analysis: &Analysis, index: u32) -> Option<Carried> {
+    let event = Event::decode(analysis.store.bytes(index)?).ok()?;
+    let PeerObserverEvent::EbpfExtractor(ebpf) = event.peer_observer_event? else {
+        return None;
+    };
+    let EbpfEvent::Message(message) = ebpf.ebpf_event? else {
+        return None;
+    };
+    let msg = message.msg?;
+    let mut keys = keys_of(&msg);
+    keys.sort_unstable();
+    keys.dedup();
+    Some(Carried {
+        detail: describe(&msg),
+        keys,
+    })
+}
+
+/// The leading eight bytes of a hash, as one number.
+///
+/// A hash is 32 bytes and comparing all of them would mean carrying them all;
+/// eight is far more than enough to tell apart the few dozen things one peer
+/// has in flight, which is the only comparison ever made.
+fn prefix(hash: &[u8]) -> Option<u64> {
+    hash.get(..8)
+        .map(|head| u64::from_le_bytes(head.try_into().expect("eight bytes")))
+}
+
+fn item_key(item: &InventoryItem) -> Option<u64> {
+    // The hash, whatever the type says it is. Bitcoin Core answers an `inv` of
+    // `wtx` with a `getdata` for `witness tx`, copying the hash across, so
+    // matching on the type as well as the hash would lose exactly the pairing
+    // this is for.
+    match item.item.as_ref()? {
+        Item::Transaction(h)
+        | Item::Block(h)
+        | Item::Wtx(h)
+        | Item::WitnessTransaction(h)
+        | Item::WitnessBlock(h)
+        | Item::CompactBlock(h) => prefix(h),
+        Item::Unknown(u) => prefix(&u.hash),
+        Item::Error(_) => None,
+    }
+}
+
+fn keys_of(msg: &Msg) -> Vec<u64> {
+    match msg {
+        Msg::Inv(m) => m.items.iter().filter_map(item_key).collect(),
+        Msg::Getdata(m) => m.items.iter().filter_map(item_key).collect(),
+        Msg::Notfound(m) => m.items.iter().filter_map(item_key).collect(),
+        // A transaction answers a request naming either of its hashes.
+        Msg::Tx(m) => [prefix(&m.tx.txid), prefix(&m.tx.wtxid)]
+            .into_iter()
+            .flatten()
+            .collect(),
+        Msg::Block(m) => prefix(&m.header.hash).into_iter().collect(),
+        Msg::Merkleblock(m) => prefix(&m.header.hash).into_iter().collect(),
+        Msg::Compactblock(m) => prefix(&m.header.hash).into_iter().collect(),
+        Msg::Getblocktxn(m) => prefix(&m.block_hash).into_iter().collect(),
+        Msg::Blocktxn(m) => prefix(&m.block_hash).into_iter().collect(),
+        // The one exact identifier in the protocol, and the reason a `pong` can
+        // be tied to its `ping` with no guessing at all.
+        Msg::Ping(m) => vec![m.value],
+        Msg::Pong(m) => vec![m.value],
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -139,7 +241,7 @@ mod tests {
             item(Item::Block(vec![2; 32])),
             item(Item::Wtx(vec![3; 32])),
         ];
-        assert_eq!(inventory(&items), "2 wtx, 1 block");
+        assert_eq!(inventory(&items), "2x wtx, 1x block");
 
         // Order is the type's, not the count's: the same mix always reads the
         // same way whichever came first on the wire.
@@ -148,7 +250,7 @@ mod tests {
             item(Item::Wtx(vec![1; 32])),
             item(Item::Wtx(vec![3; 32])),
         ];
-        assert_eq!(inventory(&swapped), "2 wtx, 1 block");
+        assert_eq!(inventory(&swapped), "2x wtx, 1x block");
     }
 
     #[test]
@@ -161,7 +263,7 @@ mod tests {
             })),
             InventoryItem { item: None },
         ];
-        assert_eq!(inventory(&items), "1 unknown, 2 malformed");
+        assert_eq!(inventory(&items), "1x unknown, 2x malformed");
     }
 
     #[test]
@@ -170,10 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn counts_are_singular_where_there_is_one_of_them() {
-        assert_eq!(count(1, "address", "addresses"), "1 address");
-        assert_eq!(count(0, "address", "addresses"), "0 addresses");
-        assert_eq!(count(9, "address", "addresses"), "9 addresses");
+    fn counts_read_the_same_shape_whatever_the_number() {
+        assert_eq!(times(1, "address"), "1x address");
+        assert_eq!(times(0, "address"), "0x address");
+        assert_eq!(times(9, "address"), "9x address");
     }
 
     /// The gate and the match arms have to agree, or a command either pays for

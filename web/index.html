@@ -251,18 +251,28 @@ canvas { display: block; width: 100%; }
 .seqsvg .head { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1; }
 .seqsvg .headtext { fill: var(--ink); font-size: 11px; font-family: var(--sans); font-weight: 600; }
 .seqsvg .headsub { fill: var(--ink-3); font-size: 10px; font-family: var(--mono); }
+/* Direction is what colour means on this diagram: inbound and outbound take the
+   same two series colours the peer's raster does, so a reader who has looked at
+   one already knows this one. The actors are grey for the same reason -- a
+   tinted lifeline would compete with the arrows for no gain. */
 .seqsvg .arrow { stroke-width: 1.5; fill: none; }
+
 .seqsvg .label { font-size: 11px; fill: var(--ink-2); }
 .seqsvg .elapsed { fill: var(--ink-3); }
 /* Keeps a label that is wider than the gap between the lifelines from
    sitting on top of one. */
 .seqsvg .plate { fill: var(--panel); }
 /* A block of activity on the lifeline that is answering, from the request to
-   the last reply. Filled, because it is a span of time and not a connector,
-   and inert, because the row underneath it is the hover target. */
-.seqsvg .act { fill: var(--panel-2); stroke-width: 1; stroke-opacity: 0.45; pointer-events: none; }
-.seqsvg .act.on { stroke-opacity: 1; stroke-width: 1.5;
+   the last reply. Filled, because it is a span of time and not a connector, and
+   inert, because the row underneath it is the hover target. `lone` is a message
+   that had to step out of somebody else's block: it is one row rather than a
+   span, so it is outlined rather than filled. */
+.seqsvg .act { fill: var(--panel-2); stroke: var(--rule-2); stroke-width: 1;
+               stroke-opacity: 0.8; pointer-events: none; }
+.seqsvg .act.lone { fill: var(--panel); stroke-dasharray: 2 2; }
+.seqsvg .act.on { stroke: var(--accent); stroke-opacity: 1; stroke-width: 1.5;
                   fill: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
+
 .seqsvg .row.tied .hit { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
 .seqsvg .gutter { fill: var(--ink-3); font-size: 10px; }
 .seqsvg .hit { fill: transparent; cursor: pointer; }
@@ -635,6 +645,21 @@ function bytes(n) {
   while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
   return `${v.toFixed(i === 0 ? 0 : v < 10 ? 2 : 1)} ${u[i]}`;
 }
+
+/**
+ * A wire size, spelled out where it is small.
+ *
+ * `inv (4x wtx, 145 bytes)` reads; `inv (4x wtx, 145 B)` makes the reader
+ * decode a unit inside a parenthesis that is already carrying one count. Above
+ * a kilobyte the short form is the readable one again.
+ */
+function wireBytes(n) {
+  if (n === null || n === undefined) return '';
+  const v = Number(n);
+  if (v >= 1000) return bytes(v);
+  return v === 1 ? '1 byte' : `${v} bytes`;
+}
+
 
 function dur(ms) {
   const s = Number(ms) / 1000;
@@ -2781,17 +2806,17 @@ const SEQ = {
   minGapMs: 10, minGap: 11, gapScale: 2.2, maxGap: 40,
   // An exchange is drawn where a sequence diagram draws one: as a block of
   // activity on the lifeline of whoever is answering, running from the request
-  // to the last reply. `bar` is its half-width, and it is also how far short of
-  // a lifeline every arrow stops -- so the padding is there whether or not a
-  // block is, and an arrow always meets a block's edge rather than crossing it.
-  // `nest` steps a block outwards, away from the arrows, when it overlaps one
-  // already on that lifeline; `nestMax` is how many steps before they share.
+  // to the last reply. `bar` is its half-width.
   //
-  // A message that lands inside a block's span but is no part of the exchange
-  // cuts a `notch` in it, wide enough to clear an arrow and its head, so the
-  // lifeline shows through where that arrow meets it. A piece of block left
-  // shorter than `minPiece` is dropped rather than drawn as a speck.
-  bar: 5, nest: 4, nestMax: 3, minBlock: 10, notch: 12, minPiece: 6,
+  // Two things happening at once on one lifeline go in separate tracks, and so
+  // does a message that lands inside a block without being part of it. Tracks
+  // step *inwards*, towards the arrows, because an arrow ends on the track it
+  // belongs to and has to reach it without crossing the tracks in front. Every
+  // arrow therefore stops at least `bar` short of a lifeline, which is the
+  // padding around it, and further out for every track it is carried on.
+  // `trackMax` is how many before they share the outermost.
+  bar: 5, trackStep: 13, trackMax: 3, minBlock: 10,
+
 };
 
 
@@ -2813,9 +2838,8 @@ const seqLimit = () => Number($("pseq-limit").value);
 
 
 /**
- * Collect ties into one block of activity per request, put each on the lifeline
- * that answered it, and nest the ones whose spans overlap so that two blocks on
- * the same lifeline never draw on top of each other.
+ * Collect ties into one block of activity per request, and put each on the
+ * lifeline that answered it.
  *
  * Grouping by request matters: a single `getdata` is answered by every `tx` it
  * asked for, and drawing those as separate blocks would stack a hundred of them
@@ -2833,21 +2857,70 @@ function exchangeBlocks(ties, rows) {
   }
 
   const blocks = [...byRequest.values()].sort((a, b) => a.request - b.request || a.last - b.last);
-  // Whoever the request was addressed to is the one doing the work, so a
-  // request that came in is answered on this node's lifeline and one that went
-  // out on the peer's. Each lifeline nests on its own.
-  const open = [[], []];
   for (const block of blocks) {
+    // Whoever the request was addressed to is the one doing the work, so a
+    // request that came in is answered on this node's lifeline and one that
+    // went out on the peer's.
     block.side = rows[block.request].inbound === true ? 0 : 1;
-    const lane = open[block.side];
-    let depth = lane.findIndex((end) => end < block.request);
-    // Deeper than the diagram has room for: share the outermost step rather
-    // than walking further and further off the lifeline.
-    if (depth === -1) depth = Math.min(lane.length, SEQ.nestMax - 1);
-    lane[depth] = block.last;
-    block.depth = depth;
+    block.rows = new Set([block.request, ...block.replies.map((tie) => tie.reply)]);
   }
   return blocks;
+}
+
+
+/**
+ * Lay every block out in tracks, one lifeline at a time, and give a track to
+ * each message that falls inside a block without being part of it.
+ *
+ * A `getdata` the peer is still working through does not stop an `addrv2`
+ * arriving, or a `tx` answering some earlier request. Drawing those inside the
+ * block would say they were part of it, and drawing the block around them
+ * would say the same. Instead they get a block of their own in the next track
+ * out, and their arrow ends on that: what an arrow lands on is what it belongs
+ * to, and two things happening at once look like two things.
+ *
+ * Tracks step in towards the arrows rather than away from them, because the
+ * arrow has to be able to reach the track it belongs to without crossing the
+ * ones in front of it.
+ *
+ * Connection events get no track. They draw a note across the whole lifeline,
+ * which would cover any block behind it, and they are a boundary in the
+ * conversation rather than a thing anyone is waiting on.
+ */
+function lifelineTracks(blocks, rows) {
+  const spans = [[], []];
+  for (const block of blocks) spans[block.side].push(block);
+
+  // A row inside somebody else's span, with nothing of its own to sit on.
+  for (const side of [0, 1]) {
+    const covered = new Set();
+    for (const block of spans[side]) {
+      for (let r = block.request + 1; r < block.last; r++) {
+        if (!block.rows.has(r)) covered.add(r);
+      }
+    }
+    for (const r of [...covered].sort((a, b) => a - b)) {
+      if (rows[r].group === 'connection') continue;
+      if (spans[side].some((block) => block.rows.has(r))) continue;
+      spans[side].push({ request: r, last: r, replies: [], rows: new Set([r]), side, loose: true });
+    }
+  }
+
+  const trackOf = [new Map(), new Map()];
+  for (const side of [0, 1]) {
+    spans[side].sort((a, b) => a.request - b.request || a.last - b.last);
+    const open = [];
+    for (const span of spans[side]) {
+      let track = open.findIndex((end) => end < span.request);
+      // Deeper than the diagram has room for: share the outermost track rather
+      // than walking further and further into the arrows.
+      if (track === -1) track = Math.min(open.length, SEQ.trackMax - 1);
+      open[track] = span.last;
+      span.track = track;
+      for (const r of span.rows) trackOf[side].set(r, track);
+    }
+  }
+  return { spans: [...spans[0], ...spans[1]], trackOf };
 }
 
 function drawSequence() {
@@ -2904,20 +2977,22 @@ function drawSequence() {
   const rowEls = seqRows(node, ctx);
   seqFocus(ctx, rowEls);
 
+  // One line, not a banner: colour means direction here, and the caveat about
+  // how replies are paired is the same caveat on every draw.
+  const caption = el('div', 'legend');
+  caption.style.cssText = 'padding:0 0 6px';
+  caption.append(swatched('span', 'it static', color(0), 'inbound'),
+    swatched('span', 'it static', color(1), 'outbound'));
   if (ctx.blocks.length) {
-    // One line, not a banner: the caveat is worth stating but it is the same
-    // caveat on every draw. The rest of it is on the toggle's tooltip.
-    const caption = el('div', 'dim',
-      `${num(ctx.ties.length)} replies linked to ${num(ctx.blocks.length)} requests, `
-      + 'paired by command, direction and timing rather than by the txids the archive carries.');
-    caption.style.margin = '0 0 6px';
-    note.append(caption);
+    caption.append(el('span', 'it static dim',
+      `${num(ctx.ties.length)} replies linked to ${num(ctx.blocks.length)} requests`));
   }
+  note.append(caption);
 }
 
 /**
  * Everything the drawing steps below need: the page, the geometry, and the
- * blocks of activity the exchanges on this page work out to.
+ * tracks the exchanges on this page lay out into.
  */
 function seqLayout(page) {
   // Exchanges are matched within the page, so a request answered on the next
@@ -2925,6 +3000,7 @@ function seqLayout(page) {
   // peer nearly every row takes part in one.
   const ties = $('pseq-ties').checked ? (page.ties ?? []) : [];
   const blocks = exchangeBlocks(ties, page.rows);
+  const { spans, trackOf } = lifelineTracks(blocks, page.rows);
 
   // Two lanes share whatever the panel has, rather than sitting at a fixed
   // width with dead space beside them. Wider lanes mean longer arrows and more
@@ -2932,6 +3008,9 @@ function seqLayout(page) {
   const room = ($('pseq-scroll').clientWidth || 900) - SEQ.gutter - SEQ.pad;
   const lane = Math.max(SEQ.minLane, Math.floor(room / 2));
   const laneX = (i) => SEQ.gutter + lane * i + lane / 2;
+  // Tracks step towards the other lifeline: outwards from this node's, inwards
+  // from the peer's, which for both means into the space the arrows cross.
+  const towards = (side) => (side === 0 ? 1 : -1);
 
   // Where each row sits, and how much empty band precedes it.
   const tops = [];
@@ -2951,28 +3030,35 @@ function seqLayout(page) {
   }
 
   return {
-    page, ties, blocks, lane, laneX, gaps,
-    // The peer's lane has room to its right and this node's has the gutter to
-    // its left, so nested blocks step outwards into that rather than inwards
-    // into the arrows, which keeps every arrow ending at the same place.
-    blockX: (side, depth) => laneX(side) + (side === 0 ? -1 : 1) * depth * SEQ.nest,
+    page, ties, blocks, spans, lane, laneX, gaps,
+    // The centre of a track, and the edge of it an arrow lands on.
+    trackX: (side, track) => laneX(side) + towards(side) * track * SEQ.trackStep,
+    arrowX: (side, track) =>
+      laneX(side) + towards(side) * (track * SEQ.trackStep + SEQ.bar),
+    // Which track a row is carried on, on one lifeline. Rows that are part of
+    // nothing sit on track zero, where an arrow stops `bar` short of the line.
+    trackAt: (side, row) => trackOf[side].get(row) ?? 0,
     width: SEQ.gutter + lane * 2 + SEQ.pad,
     height: y + SEQ.pad,
     rowY: (i) => tops[i] + SEQ.row / 2,
     nodeX: laneX(0),
     peerX: laneX(1),
-    // One peer, so the colour is not distinguishing it from another; it ties
-    // the diagram to the rest of the page's palette.
-    colour: color(0),
     // How long each reply took, for the label on the reply's arrow.
     elapsedOf: new Map(ties.map((t) => [t.reply, t.elapsedMs])),
   };
 }
 
 
-/** The sticky part: column headings, and an actor box per lifeline. */
+/**
+ * The sticky part: column headings, and an actor box per lifeline.
+ *
+ * Both actors are drawn in the same grey. Colour on this diagram means the
+ * direction a message went, and a tinted lifeline would compete with that for
+ * no gain: there are two actors, they are labelled, and which is which is never
+ * in doubt.
+ */
 function seqHeaders(head, ctx) {
-  const { page, laneX, lane, colour } = ctx;
+  const { page, laneX, lane } = ctx;
 
   // The date lives here, once, so each row needs only a time of day. It stacks
   // rather than running across, because the gutter is only as wide as a
@@ -2984,27 +3070,21 @@ function seqHeaders(head, ctx) {
 
   const peer = S.peerRows.find((p) => p.peerId === S.seq.peer);
   const actors = [
-    { title: 'this node', sub: '', colour: null },
-    { title: `peer ${S.seq.peer}`, sub: peer?.addr ?? '', colour },
+    { title: 'this node', sub: '' },
+    { title: `peer ${S.seq.peer}`, sub: peer?.addr ?? '' },
   ];
   actors.forEach((actor, i) => {
     const x = laneX(i);
     const w = lane - 26;
-    const box = svg('rect', { class: 'head', x: x - w / 2, y: 6, width: w, height: 32, rx: 3 });
-    // Inline style, not a presentation attribute: `.seqsvg .head` and `.life`
-    // already set `stroke`, and any CSS rule beats a presentation attribute.
-    if (actor.colour) box.style.stroke = actor.colour;
-    // A stub of lifeline below the box, so the sticky header still joins up
-    // with the lifelines scrolling beneath it.
-    const stub = svg('line', { class: 'life', x1: x, y1: 38, x2: x, y2: SEQ.head });
-    if (actor.colour) {
-      stub.style.stroke = actor.colour;
-      stub.style.strokeOpacity = '0.5';
-    }
-    head.append(box, stub);
-    // Centre the title in the box when there is no subtitle under it.
-    head.append(svgText(
-      { class: 'headtext', x, y: actor.sub ? 20 : 26, 'text-anchor': 'middle' }, actor.title));
+    head.append(
+      svg('rect', { class: 'head', x: x - w / 2, y: 6, width: w, height: 32, rx: 3 }),
+      // A stub of lifeline below the box, so the sticky header still joins up
+      // with the lifelines scrolling beneath it.
+      svg('line', { class: 'life', x1: x, y1: 38, x2: x, y2: SEQ.head }),
+      // Centre the title in the box when there is no subtitle under it.
+      svgText({ class: 'headtext', x, y: actor.sub ? 20 : 26, 'text-anchor': 'middle' },
+        actor.title),
+    );
     if (actor.sub) {
       const room = Math.floor(w / 6.1);
       head.append(svgText({ class: 'headsub', x, y: 32, 'text-anchor': 'middle' },
@@ -3019,30 +3099,18 @@ function seqHeaders(head, ctx) {
  * holds only a stub of each, to join up with these when it is stuck at the top.
  */
 function seqLifelines(node, ctx) {
-  for (const [x, lineColour] of [[ctx.nodeX, null], [ctx.peerX, ctx.colour]]) {
-    const life = svg('line', { class: 'life', x1: x, y1: 0, x2: x, y2: ctx.height });
-    if (lineColour) {
-      life.style.stroke = lineColour;
-      life.style.strokeOpacity = '0.5';
-    }
-    node.append(life);
+  for (const x of [ctx.nodeX, ctx.peerX]) {
+    node.append(svg('line', { class: 'life', x1: x, y1: 0, x2: x, y2: ctx.height }));
   }
 }
 
 
 /**
- * One block of activity per exchange, on the lifeline that answered it: from
- * the arrow that asked to the arrow that last answered. Its height is how long
- * the answer took, because the rows are already spaced by time -- a `getdata`
- * served from the mempool is one row tall, and one the peer sat on for a second
- * is a block you can see from across the room.
- *
- * A message that lands inside the span but is no part of the exchange -- an
- * `addrv2` arriving while the peer is still working through a `getdata`, which
- * happens all the time -- cuts a notch in the block rather than being swallowed
- * by it. The notch is where the lifeline shows through, so that row's arrow
- * ends exactly as an arrow on an idle lifeline does, and the eye can tell in one
- * look which of the messages crossing a block belong to it.
+ * One block per span: an exchange from the arrow that asked to the arrow that
+ * last answered, or a lone message that had to step out of one. Its height is
+ * how long the exchange took, because the rows are already spaced by time -- a
+ * `getdata` served from the mempool is one row tall, and one the peer sat on
+ * for a second is a block you can see from across the room.
  *
  * They go in underneath the rows so that a label, a note or a row highlight is
  * never drawn over by one, and they take no pointer events: the rows are the
@@ -3051,49 +3119,25 @@ function seqLifelines(node, ctx) {
 function seqBlocks(node, ctx) {
   const layer = svg('g');
   node.append(layer);
-  for (const block of ctx.blocks) {
-    const x = ctx.blockX(block.side, block.depth);
-    const top = ctx.rowY(block.request);
-    const bottom = Math.max(ctx.rowY(block.last), top + SEQ.minBlock);
-    const group = svg('g', { class: 'act' });
-    group.style.stroke = ctx.colour;
+  for (const span of ctx.spans) {
+    const x = ctx.trackX(span.side, span.track);
+    const top = ctx.rowY(span.request);
+    const bottom = Math.max(ctx.rowY(span.last), top + SEQ.minBlock);
     // Held a hair short at both ends, so that the back-to-back exchanges a
     // transaction-relay peer is made of read as a stack of blocks rather than
     // as one unbroken column.
-    for (const [from, to] of blockSegments(ctx, block, top + 1, bottom - 1)) {
-      group.append(svg('rect', {
-        x: x - SEQ.bar, y: from, width: SEQ.bar * 2, height: to - from, rx: 2,
-      }));
-    }
-    layer.append(group);
-    block.el = group;
+    span.el = svg('rect', {
+      class: `act${span.loose ? ' lone' : ''}`,
+      x: x - SEQ.bar, y: top + 1, width: SEQ.bar * 2, height: bottom - top - 2, rx: 2,
+    });
+    layer.append(span.el);
   }
-}
-
-/**
- * Split a block's span at every row inside it that is not its own, and drop any
- * piece too small to read as a block. A block with nothing crossing it comes
- * back as the single piece it started as.
- */
-function blockSegments(ctx, block, top, bottom) {
-  const mine = new Set([block.request, ...block.replies.map((tie) => tie.reply)]);
-  const segments = [];
-  let from = top;
-  for (let r = block.request + 1; r < block.last; r++) {
-    if (mine.has(r)) continue;
-    const cut = ctx.rowY(r);
-    if (cut - SEQ.notch / 2 - from >= SEQ.minPiece) segments.push([from, cut - SEQ.notch / 2]);
-    from = cut + SEQ.notch / 2;
-  }
-  if (bottom - from >= SEQ.minPiece) segments.push([from, bottom]);
-  // Everything was notched away: keep the ends, so the exchange is still drawn.
-  return segments.length ? segments : [[top, Math.max(bottom, top + SEQ.minPiece)]];
 }
 
 
 /** One row per message, returned so the exchanges can light them up. */
 function seqRows(node, ctx) {
-  const { page, width, rowY, peerX, colour } = ctx;
+  const { page, width, rowY, peerX } = ctx;
 
   // Label plates go in their own layer, under every row: they knock the
   // lifelines and the blocks out from under a label, but must stay below the
@@ -3119,7 +3163,6 @@ function seqRows(node, ctx) {
       const box = svg('rect', {
         class: 'note', x: peerX - w / 2, y: y - 8, width: w, height: 16, rx: 2,
       });
-      box.style.stroke = colour;
       g.append(box, svgText({ class: 'notetext', x: peerX, y: y + 3.5, 'text-anchor': 'middle' },
         r.kind ?? ''));
     } else {
@@ -3151,43 +3194,47 @@ function seqRows(node, ctx) {
 /** One message as an arrow between the two lifelines, with its label. */
 function seqArrow(g, plates, ctx, r, i, y) {
   const inbound = r.inbound === true;
-  // Every arrow stops `bar` short of a lifeline at both ends, which is where a
-  // block of activity's edge is. So an arrow meets the block that answers it
-  // instead of running through it, and the lifelines keep a little air around
-  // them even on the rows that are part of no exchange at all.
-  const from = inbound ? ctx.peerX - SEQ.bar : ctx.nodeX + SEQ.bar;
-  const to = inbound ? ctx.nodeX + SEQ.bar : ctx.peerX - SEQ.bar;
+  // Each end lands on the edge of the track that row is carried on, which is
+  // the block it belongs to where it belongs to one and the padding around a
+  // bare lifeline where it does not. So an arrow meets its own activity rather
+  // than whatever else happens to be running at the time.
+  const nodeEnd = ctx.arrowX(0, ctx.trackAt(0, i));
+  const peerEnd = ctx.arrowX(1, ctx.trackAt(1, i));
+  const from = inbound ? peerEnd : nodeEnd;
+  const to = inbound ? nodeEnd : peerEnd;
   const dir = Math.sign(to - from) || 1;
   const end = to - dir * 5;
+  const colour = color(inbound ? 0 : 1);
   g.append(
-    svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: ctx.colour }),
+    svg('line', { class: 'arrow', x1: from, y1: y, x2: end, y2: y, stroke: colour }),
     svg('path', {
       d: `M ${to} ${y} L ${end - dir * 4} ${y - 4} L ${end - dir * 4} ${y + 4} Z`,
-      fill: ctx.colour,
+      fill: colour,
     }),
   );
 
-  const main = r.size ? `${r.kind} ${bytes(r.size)}` : r.kind ?? '';
-  // What the message carried, where its size does not already say: how many of
-  // each inventory type an `inv` or `getdata` names, how many addresses an
+  // What the message carried, where its size does not already say it: how many
+  // of each inventory type an `inv` or `getdata` names, how many addresses an
   // `addrv2` gossips, how many headers a `headers` holds.
-  const detail = r.detail ? ` · ${r.detail}` : '';
+  const carried = [r.detail, wireBytes(r.size)].filter(Boolean).join(', ');
+  const main = carried ? `${r.kind} (${carried})` : r.kind ?? '';
   const elapsed = ctx.elapsedOf.has(i) ? ` ↩ ${dur(ctx.elapsedOf.get(i))}` : '';
-  const cx = (from + to) / 2;
+  // Centred between the lifelines rather than on the arrow, so that a column of
+  // labels lines up however far out the arrows under them reach.
+  const cx = (ctx.nodeX + ctx.peerX) / 2;
   // A label wider than the gap between the lifelines would sit on top of one,
   // so it gets an opaque plate under it. The width comes from the character
   // count rather than `getBBox`, which reports nothing while the tab is hidden;
   // the diagram is monospaced, so counting is accurate.
-  const plateWidth = (main + detail + elapsed).length * 6.7 + 8;
+  const plateWidth = (main + elapsed).length * 6.7 + 8;
   plates.append(svg('rect', {
     class: 'plate', x: cx - plateWidth / 2, y: y - 15, width: plateWidth, height: 13, rx: 2,
   }));
 
   const label = svgText({ class: 'label', x: cx, y: y - 5, 'text-anchor': 'middle' }, main);
-  for (const extra of [detail, elapsed]) {
-    if (!extra) continue;
+  if (elapsed) {
     const span = svg('tspan', { class: 'elapsed' });
-    span.textContent = extra;
+    span.textContent = elapsed;
     label.append(span);
   }
   g.append(label);
@@ -3195,46 +3242,48 @@ function seqArrow(g, plates, ctx, r, i, y) {
 
 
 /**
- * Tie the rows to the blocks: hovering either end of an exchange lights the
- * block and every row in it, and says in a tooltip what answered what.
+ * Tie the rows to the blocks: hovering any row in an exchange lights the whole
+ * of it and says in a tooltip what answered what. A lone block -- a message
+ * that had to step out of somebody else's span -- lights on its own row too,
+ * so that every block on the diagram answers to something.
  *
- * A row can be in two exchanges at once -- a `getdata` answers an `inv` and
- * asks for a transaction in the same breath -- so both the highlight and the
- * tooltip take a list.
+ * A row can be in two exchanges at once, one on each lifeline: a `getdata`
+ * answers an `inv` and asks for a transaction in the same breath. Both the
+ * highlight and the tooltip take a list.
  */
 function seqFocus(ctx, rowEls) {
   const partOf = new Map();
-  const add = (row, block) => {
-    if (!partOf.has(row)) partOf.set(row, []);
-    partOf.get(row).push(block);
-  };
-  for (const block of ctx.blocks) {
-    add(block.request, block);
-    for (const tie of block.replies) add(tie.reply, block);
+  for (const span of ctx.spans) {
+    for (const r of span.rows) {
+      if (!partOf.has(r)) partOf.set(r, []);
+      partOf.get(r).push(span);
+    }
   }
 
-  const describe = (block) => {
-    const request = ctx.page.rows[block.request].kind;
-    const answers = block.replies.map((tie) => ctx.page.rows[tie.reply].kind);
-    const spread = block.replies.map((tie) => tie.elapsedMs);
+  const describe = (span) => {
+    const request = ctx.page.rows[span.request].kind;
+    const answers = span.replies.map((tie) => ctx.page.rows[tie.reply].kind);
+    const spread = span.replies.map((tie) => tie.elapsedMs);
     return answers.length === 1
       ? `${request} → ${answers[0]}, ${dur(spread[0])}`
       : `${request} → ${answers.length} replies, `
         + `${dur(Math.min(...spread))} to ${dur(Math.max(...spread))}`;
   };
 
-  for (const [row, blocks] of partOf) {
+  for (const [row, spans] of partOf) {
     const g = rowEls[row];
     if (!g) continue;
-    const tip = svg('title');
-    tip.textContent = blocks.map(describe).join('\n');
-    g.append(tip);
+    const said = spans.filter((span) => !span.loose).map(describe);
+    if (said.length) {
+      const tip = svg('title');
+      tip.textContent = said.join('\n');
+      g.append(tip);
+    }
 
     const focus = (on) => {
-      for (const block of blocks) {
-        block.el?.classList.toggle('on', on);
-        rowEls[block.request]?.classList.toggle('tied', on);
-        for (const tie of block.replies) rowEls[tie.reply]?.classList.toggle('tied', on);
+      for (const span of spans) {
+        span.el?.classList.toggle('on', on);
+        for (const r of span.rows) rowEls[r]?.classList.toggle('tied', on);
       }
     };
     g.addEventListener('mouseenter', () => focus(true));

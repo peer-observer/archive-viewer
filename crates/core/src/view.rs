@@ -1093,6 +1093,7 @@ pub fn sequence(
     // Built in one pass, so that a row the store cannot produce drops out of
     // both lists at once and the tie positions stay aligned with the rows.
     let mut turns = Vec::with_capacity(indices.len());
+    let mut keys: Vec<Vec<u64>> = Vec::with_capacity(indices.len());
     let mut rows = Vec::with_capacity(indices.len());
     for &index in &indices {
         let (Some(row), Some(mut value)) = (analysis.store.row(index), event_row(analysis, index))
@@ -1100,21 +1101,31 @@ pub fn sequence(
             continue;
         };
         let command = analysis.kinds.get(row.kind).map_or("", |k| k.name.as_str());
-        // What the message carried, for the rows that have something to say
-        // beyond their size. Decoded here rather than during ingest: it is a
-        // page of messages, not the whole archive.
-        if payload::has_detail(command) {
-            if let Some(detail) = payload::message_detail(analysis, index) {
-                value["detail"] = json!(detail);
-            }
+        // What the message carried and what it names, decoded here rather than
+        // during ingest: it is a page of messages, not the whole archive. The
+        // line goes on the label; the hashes pair each reply with the request
+        // that actually asked for it.
+        let carried = payload::worth_decoding(command)
+            .then(|| payload::carried(analysis, index))
+            .flatten()
+            .unwrap_or_default();
+        if let Some(detail) = &carried.detail {
+            value["detail"] = json!(detail);
         }
         turns.push(Turn {
             peer: row.peer,
             command,
             inbound: row.inbound(),
             timestamp: row.timestamp,
+            keys: &[],
         });
+        keys.push(carried.keys);
         rows.push(value);
+    }
+    // The borrow has to outlive the turns, so the key lists are collected first
+    // and pointed at afterwards.
+    for (turn, list) in turns.iter_mut().zip(&keys) {
+        turn.keys = list;
     }
 
     let ties: Vec<Value> = match_turns(&turns)
