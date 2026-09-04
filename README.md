@@ -180,10 +180,15 @@ capture. Those numbers are paired by command, direction and timing alone.
 
 Every arrow says what its message carried, where the size does not already say
 it: how many of each inventory type an `inv`, `getdata` or `notfound` names, how
-many addresses an `addr` or `addrv2` gossips, how many headers, short ids,
-indexes or transactions the block messages hold. That is decoded from the
-retained bytes for the hundred rows on the page rather than during ingest, and
-costs about a millisecond a page. On the sample archive it is what shows that
+many addresses an `addr` or `addrv2` gossips, how many headers a `headers`
+holds, how many indexes or transactions the block-relay messages carry, and for
+a `cmpctblock` both numbers -- the short ids the sender expects this node to
+have already, and the transactions it prefilled because it knew otherwise. On
+the sample archive every one of the forty-five compact blocks prefills exactly
+one, the coinbase, against three to five thousand short ids.
+
+That is decoded from the retained bytes for the rows on the page rather than
+during ingest, and costs about a millisecond a page. It is also what shows that
 this node asks with `witness tx` where its peers announce with `wtx` — 4,447
 `getdata` against 163 — which is not visible from the command name alone.
 
@@ -476,3 +481,10 @@ they are txids, block hashes and raw transactions.
 both light and dark against adjacent-pair colour-vision-deficiency and
 normal-vision separation floors. The legend carries each group's total, so series
 identity never rests on colour alone.
+
+
+## Licence
+
+MIT -- see [LICENSE](LICENSE). The `peer-observer` submodule is a separate
+project under its own licence, and only its `.proto` files are used here, as
+input to `prost-build`.

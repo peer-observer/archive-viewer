@@ -48,7 +48,15 @@ fn describe(msg: &Msg) -> Option<String> {
         Msg::Addr(m) => Some(times(m.addresses.len(), "address")),
         Msg::Addrv2(m) => Some(times(m.addresses.len(), "address")),
         Msg::Headers(m) => Some(times(m.headers.len(), "header")),
-        Msg::Compactblock(m) => Some(times(m.short_ids.len(), "short id")),
+        // A compact block is both numbers or neither: the short ids are what
+        // the peer expects this node to already have, and the prefilled ones
+        // are what it knew it would not -- the coinbase always, and whatever
+        // else it guessed was missing.
+        Msg::Compactblock(m) => Some(format!(
+            "{}, {}",
+            times(m.short_ids.len(), "short id"),
+            times(m.transactions.len(), "prefilled"),
+        )),
         Msg::Getblocktxn(m) => Some(times(m.tx_indexes.len(), "index")),
         Msg::Blocktxn(m) => Some(times(m.transactions.len(), "transaction")),
         _ => None,
@@ -266,6 +274,27 @@ mod tests {
         assert_eq!(inventory(&items), "1x unknown, 2x malformed");
     }
 
+    #[test]
+    fn a_compact_block_reports_what_it_sent_and_what_it_expected() {
+        use crate::proto::bitcoin_primitives::{BlockHeader, PrefilledTransaction, Transaction};
+        use crate::proto::ebpf_extractor::message::CompactBlock;
+        let prefilled = |index| PrefilledTransaction {
+            diff_index: index,
+            tx: Transaction::default(),
+        };
+        let block = CompactBlock {
+            header: BlockHeader::default(),
+            nonce: 7,
+            short_ids: vec![vec![0; 6]; 2431],
+            // The coinbase, which the peer can never have seen, and one more the
+            // sender guessed at.
+            transactions: vec![prefilled(0), prefilled(12)],
+        };
+        assert_eq!(
+            describe(&Msg::Compactblock(block)),
+            Some("2431x short id, 2x prefilled".to_string())
+        );
+    }
     #[test]
     fn an_empty_inventory_says_so_rather_than_nothing() {
         assert_eq!(inventory(&[]), "empty");
