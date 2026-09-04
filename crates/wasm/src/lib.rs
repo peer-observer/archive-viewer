@@ -159,6 +159,33 @@ impl Session {
         Ok(result.to_string())
     }
 
+    /// A raster of per-peer activity over time: one row per peer, one column
+    /// per pixel, split by direction.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = peerActivity)]
+    pub fn peer_activity(
+        &self,
+        filter_json: &str,
+        columns: u32,
+        max_rows: u32,
+        min_duration_ms: f64,
+        sort: &str,
+        weight: &str,
+    ) -> Result<String, JsError> {
+        let filter: Filter = serde_json::from_str(filter_json)
+            .map_err(|e| JsError::new(&format!("bad filter: {e}")))?;
+        Ok(view::peer_activity(
+            &self.analysis,
+            &filter,
+            columns as usize,
+            max_rows as usize,
+            min_duration_ms.max(0.0) as u64,
+            sort,
+            weight,
+        )
+        .to_string())
+    }
+
     /// Transaction relay: who announced what first, and what duplicates cost.
     pub fn relay(&self, sort: &str, descending: bool, limit: u32) -> String {
         view::relay(&self.analysis, sort, descending, limit as usize).to_string()

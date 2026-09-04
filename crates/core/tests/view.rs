@@ -2,6 +2,7 @@ mod support;
 
 use archive_viewer_core::analysis::Analysis;
 use archive_viewer_core::view::{self, Filter, QueryCache};
+use serde_json::Value;
 use support::*;
 
 const BUDGET: u64 = 64 * 1024 * 1024;
@@ -740,4 +741,143 @@ fn unanswered_requests_say_which_side_stayed_silent() {
     assert_eq!(getaddr["unanswered"], 2);
     assert_eq!(getaddr["unansweredByPeers"], 1, "peer 3 ignored this node");
     assert_eq!(getaddr["unansweredByUs"], 1, "this node ignored peer 4");
+}
+
+/// Two peers with overlapping but distinct activity, and a connection event.
+fn activity_archive() -> Analysis {
+    let mut events = vec![connection_event(1_000, 1)];
+    // Peer 1 talks throughout; peer 2 only in the second half.
+    for i in 0..40u64 {
+        events.push(message_event(1_000 + i * 100, 1, "inv", i % 2 == 0, 100));
+    }
+    for i in 0..10u64 {
+        events.push(message_event(3_000 + i * 100, 2, "tx", true, 250));
+    }
+    let stream = record_stream(&header(1, None), &events);
+    let mut analysis = Analysis::new(BUDGET);
+    analysis.begin_file("activity.bin".to_string(), stream.len() as u64);
+    analysis.push(&stream).expect("push");
+    analysis.end_file();
+    analysis
+}
+
+#[test]
+fn peer_activity_rasters_each_peer_into_columns() {
+    let analysis = activity_archive();
+    let page = view::peer_activity(&analysis, &Filter::default(), 10, 50, 0, "first", "count");
+
+    assert_eq!(page["columns"], 10);
+    assert_eq!(page["shown"], 2);
+    assert_eq!(page["peers"], 2);
+    assert_eq!(page["partial"], false);
+
+    let rows = page["rows"].as_array().unwrap();
+    // First-seen order: peer 1 connected first.
+    assert_eq!(rows[0]["peerId"], 1);
+    assert_eq!(rows[1]["peerId"], 2);
+
+    // Every message lands in exactly one cell, and directions are separated.
+    let sum = |v: &Value| -> u64 {
+        v.as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|pair| pair[1].as_u64().unwrap())
+            .sum()
+    };
+    assert_eq!(sum(&rows[0]["in"]), 20);
+    assert_eq!(sum(&rows[0]["out"]), 20);
+    assert_eq!(sum(&rows[1]["in"]), 10);
+    assert_eq!(sum(&rows[1]["out"]), 0, "peer 2 only ever received");
+
+    // Columns are pairs of (column, value) and stay inside the grid.
+    for row in rows {
+        for lane in ["in", "out"] {
+            let flat = row[lane].as_array().unwrap();
+            assert_eq!(flat.len() % 2, 0, "flat pairs");
+            for pair in flat.chunks(2) {
+                assert!(pair[0].as_u64().unwrap() < 10);
+                assert!(pair[1].as_u64().unwrap() > 0, "empty cells are not sent");
+            }
+        }
+    }
+
+    // The connection event is a mark, not a dot.
+    let marks = rows[0]["marks"].as_array().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["kind"], "inbound");
+    assert_eq!(rows[0]["marksComplete"], true);
+}
+
+#[test]
+fn peer_activity_weighs_by_bytes_when_asked() {
+    let analysis = activity_archive();
+    let by_bytes = view::peer_activity(&analysis, &Filter::default(), 10, 50, 0, "first", "bytes");
+    assert_eq!(by_bytes["byBytes"], true);
+
+    let rows = by_bytes["rows"].as_array().unwrap();
+    let sum = |v: &Value| -> u64 {
+        v.as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|pair| pair[1].as_u64().unwrap())
+            .sum()
+    };
+    // Peer 2 received ten 250-byte transactions.
+    assert_eq!(sum(&rows[1]["in"]), 2_500);
+}
+
+#[test]
+fn peer_activity_filters_and_orders_its_rows() {
+    let analysis = activity_archive();
+
+    // Peer 2 was only seen for 900 ms, so a longer threshold drops it.
+    let long = view::peer_activity(
+        &analysis,
+        &Filter::default(),
+        10,
+        50,
+        2_000,
+        "first",
+        "count",
+    );
+    assert_eq!(long["shown"], 1);
+    assert_eq!(long["rows"][0]["peerId"], 1);
+    assert_eq!(long["peers"], 1, "the count reflects the threshold too");
+
+    // Busiest first is a different order from first seen.
+    let busiest = view::peer_activity(&analysis, &Filter::default(), 10, 50, 0, "events", "count");
+    assert_eq!(busiest["rows"][0]["peerId"], 1);
+
+    // A row cap truncates but still reports how many there were.
+    let capped = view::peer_activity(&analysis, &Filter::default(), 10, 1, 0, "first", "count");
+    assert_eq!(capped["shown"], 1);
+    assert_eq!(capped["peers"], 2);
+
+    // A brushed time range narrows the span rather than the peer list.
+    let brushed = Filter {
+        time_from: Some(3_000),
+        time_to: Some(3_900),
+        ..Default::default()
+    };
+    let window = view::peer_activity(&analysis, &brushed, 10, 50, 0, "first", "count");
+    assert_eq!(window["startMs"], 3_000);
+    assert_eq!(window["endMs"], 3_900);
+    let rows = window["rows"].as_array().unwrap();
+    let peer2 = rows.iter().find(|r| r["peerId"] == 2).unwrap();
+    let total: u64 = peer2["in"]
+        .as_array()
+        .unwrap()
+        .chunks(2)
+        .map(|p| p[1].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 10, "every one of peer 2's messages is in the window");
+}
+
+#[test]
+fn peer_activity_of_an_empty_analysis_is_well_formed() {
+    let analysis = Analysis::new(BUDGET);
+    let page = view::peer_activity(&analysis, &Filter::default(), 100, 50, 0, "first", "count");
+    assert_eq!(page["shown"], 0);
+    assert_eq!(page["rows"].as_array().unwrap().len(), 0);
+    assert_eq!(page["max"], 0);
 }

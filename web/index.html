@@ -107,7 +107,7 @@ input[type=search] { min-width: 180px; }
 main { padding: 12px; }
 
 /* ---------------------------------------------------------------- panels */
-.p { background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; }
+.p { background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; position: relative; }
 .p > .h {
   display: flex; align-items: baseline; gap: 10px;
   padding: 6px 10px; border-bottom: 1px solid var(--rule);
@@ -167,14 +167,14 @@ canvas { display: block; width: 100%; }
 .legend .it { color: var(--ink-2); white-space: nowrap; cursor: pointer; font-size: 12px; }
 .legend .it b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 .legend .it.off { opacity: .35; }
-#tip, #tip2 {
+#tip, #tip2, #atip {
   position: absolute; pointer-events: none; z-index: 20;
   background: var(--panel); border: 1px solid var(--rule-2); border-radius: 3px;
   padding: 6px 8px; box-shadow: 0 3px 12px rgb(0 0 0 / .2); min-width: 150px; font-size: 12px;
 }
-#tip .t, #tip2 .t { color: var(--ink-3); font-family: var(--mono); font-size: 11px; margin-bottom: 4px; }
-#tip td, #tip2 td { border: none; padding: 0; }
-#tip td.n, #tip2 td.n { padding-left: 14px; }
+#tip .t, #tip2 .t, #atip .t { color: var(--ink-3); font-family: var(--mono); font-size: 11px; margin-bottom: 4px; }
+#tip td, #tip2 td, #atip td { border: none; padding: 0; }
+#tip td.n, #tip2 td.n, #atip td.n { padding-left: 14px; }
 
 /* --------------------------------------------------------------- layouts */
 .cols { display: grid; gap: 12px; align-items: start; }
@@ -278,6 +278,7 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
   <button data-tab="peers" aria-selected="false">Peers</button>
   <button data-tab="events" aria-selected="false">Events</button>
   <button data-tab="sequence" aria-selected="false">Sequence</button>
+  <button data-tab="activity" aria-selected="false">Activity</button>
   <button data-tab="relay" aria-selected="false">Relay</button>
 </div>
 
@@ -395,6 +396,45 @@ body.drag #start .box { border-color: var(--accent); background: var(--panel-2);
           <div class="h"><span>Event</span></div>
           <div class="body dim">Select an event to decode it in full.</div>
         </div>
+      </div>
+    </div>
+
+    <!-- --------------------------------------------------------- activity -->
+    <div id="tab-activity" hidden>
+      <div id="anote"></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+        <span class="seg">
+          <button id="asort-first" class="on" title="Connection order, so churn reads as a staircase">first seen</button><button id="asort-events" title="Busiest peers first">busiest</button>
+        </span>
+        <span class="seg">
+          <button id="aw-count" class="on" title="Shade by how many messages were exchanged">messages</button><button id="aw-bytes" title="Shade by how many bytes were exchanged">bytes</button>
+        </span>
+        <select id="arows" title="How many peers to draw">
+          <option value="40">40 peers</option>
+          <option value="80" selected>80 peers</option>
+          <option value="160">160 peers</option>
+          <option value="400">400 peers</option>
+        </select>
+        <select id="amin" title="Leave out peers that were barely connected">
+          <option value="0">any duration</option>
+          <option value="10000">connected 10s+</option>
+          <option value="60000" selected>connected 1m+</option>
+          <option value="600000">connected 10m+</option>
+          <option value="3600000">connected 1h+</option>
+        </select>
+        <span style="flex:1"></span>
+        <span class="dim" id="acount"></span>
+      </div>
+      <div class="p">
+        <div class="scroll" id="ascroll" style="max-height:calc(100vh - 190px)">
+          <canvas id="act"></canvas>
+        </div>
+        <div id="atip" hidden></div>
+      </div>
+      <div class="dim" style="margin-top:8px">
+        One row per peer, one column per pixel of time. Each mark is the messages exchanged in
+        that slice — inbound above the line, outbound below — shaded by how many. Vertical ticks
+        are connection events.
       </div>
     </div>
 
@@ -548,6 +588,7 @@ const S = {
   seqPeers: [], seqOffset: 0, seqSelected: null,
   relayRows: [], relaySort: { key: "first", desc: true },
   exchangeRows: [], exchangeSel: null,
+  activity: null,
   tab: 'overview',
 };
 
@@ -619,6 +660,7 @@ async function loadFiles(list) {
   S.seqPeers = []; S.seqOffset = 0; S.seqSelected = null;
   S.relayRows = []; S.relaySort = { key: "first", desc: true };
   S.exchangeRows = []; S.exchangeSel = null;
+  S.activity = null;
   S.filter = { groups: [], kinds: [], peerIds: [], timeFrom: null, timeTo: null, text: '' };
 
   const total = files.reduce((sum, f) => sum + f.size, 0);
@@ -1631,6 +1673,215 @@ function jsonNodes(value, depth) {
   return [el('span', 'n', String(value))];
 }
 
+/* --------------------------------------------------------------- activity */
+
+/**
+ * Peer activity raster: one row per peer, one column per pixel of time.
+ *
+ * The counts come back per cell rather than per message. Alpha-blending a dot
+ * per message would say the same thing for a sparse peer and saturate to a
+ * solid bar for a busy one, where a count mapped through a log scale keeps the
+ * difference between "some traffic" and "a great deal" visible at both ends.
+ */
+const ACT = { row: 11, lane: 3, gap: 1, labels: 168, top: 10, bottom: 24, right: 10 };
+
+function activitySettings() {
+  return {
+    sort: $('asort-events').classList.contains('on') ? 'events' : 'first',
+    weight: $('aw-bytes').classList.contains('on') ? 'bytes' : 'count',
+    rows: Number($('arows').value),
+    minMs: Number($('amin').value),
+  };
+}
+
+function drawActivity() {
+  if (!S.session || S.dead) return;
+  const canvas = $('act');
+  const width = $('ascroll').clientWidth;
+  if (!width) return;                             // hidden tab: nothing to size to
+
+  const { sort, weight, rows, minMs } = activitySettings();
+  const columns = Math.max(1, Math.floor(width - ACT.labels - ACT.right));
+  const filter = JSON.stringify({
+    kinds: [], groups: [], peerIds: [],
+    timeFrom: S.filter.timeFrom, timeTo: S.filter.timeTo, text: '',
+  });
+  const model = callJson('peerActivity', filter, columns, rows, minMs, sort, weight);
+  if (!model) return;
+  S.activity = model;
+
+  const box = $('anote');
+  box.replaceChildren();
+  if (model.partial) {
+    box.append(note('This chart covers the retained events only.',
+      `Retention stopped at ${num(model.retained)} of ${num(model.totalEvents)} events, so the `
+      + 'right-hand side of the chart is missing rather than quiet. Raise the retention budget '
+      + 'and load the file again for the whole picture.'));
+  }
+  $('acount').textContent = model.shown < model.peers
+    ? `${num(model.shown)} of ${num(model.peers)} peers`
+    : `${num(model.shown)} peers`;
+
+  const height = ACT.top + model.rows.length * ACT.row + ACT.bottom;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(width * dpr));
+  canvas.height = Math.max(1, Math.floor(height * dpr));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (!model.rows.length) {
+    ctx.fillStyle = cssVar('--ink-3');
+    ctx.font = `12px ${cssVar('--sans')}`;
+    ctx.fillText('No peer was connected long enough to draw.', ACT.labels, ACT.top + 16);
+    return;
+  }
+
+  const inColour = color(0);
+  const outColour = color(1);
+  // Log, not linear: a busy peer out-messages a quiet one by three orders of
+  // magnitude, and a linear ramp would leave everything but the peak invisible.
+  const ceiling = Math.log1p(model.max || 1);
+  const alpha = (v) => 0.25 + 0.75 * (Math.log1p(v) / ceiling);
+
+  ctx.font = `10px ${cssVar('--mono')}`;
+  ctx.textBaseline = 'middle';
+  const ruleColour = cssVar('--rule');
+
+  model.rows.forEach((r, i) => {
+    const y = ACT.top + i * ACT.row;
+    const mid = y + ACT.row / 2;
+
+    // A hairline per row, so a peer with almost no traffic is still a row and
+    // not a gap.
+    ctx.fillStyle = ruleColour;
+    ctx.fillRect(ACT.labels, Math.round(mid), columns, 0.5);
+
+    ctx.fillStyle = cssVar(S.peer === r.peerId ? '--ink' : '--ink-3');
+    const label = `${r.peerId} ${r.addr ?? ''}`;
+    ctx.fillText(label.length > 26 ? `${label.slice(0, 25)}…` : label, 6, mid);
+
+    // Inbound above the line, outbound below.
+    for (const [flat, colour, dy] of [[r.in, inColour, -ACT.lane - ACT.gap],
+                                      [r.out, outColour, ACT.gap]]) {
+      ctx.fillStyle = colour;
+      for (let k = 0; k < flat.length; k += 2) {
+        ctx.globalAlpha = alpha(flat[k + 1]);
+        ctx.fillRect(ACT.labels + flat[k], mid + dy, 1, ACT.lane);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Connection events span the row, so they read as boundaries rather than
+    // as more traffic.
+    for (const mark of r.marks) {
+      ctx.fillStyle = markColour(mark.kind);
+      ctx.fillRect(ACT.labels + mark.col, y + 1, 1, ACT.row - 2);
+    }
+  });
+
+  drawActivityAxis(ctx, model, columns, height);
+}
+
+const markColour = (kind) => cssVar(
+  kind === 'inbound_evicted' ? '--bad' : kind === 'misbehaving' ? '--warn' : '--ink-2');
+
+function drawActivityAxis(ctx, model, columns, height) {
+  const y = height - ACT.bottom + 6;
+  ctx.fillStyle = cssVar('--rule-2');
+  ctx.fillRect(ACT.labels, y - 4, columns, 0.5);
+  ctx.fillStyle = cssVar('--ink-3');
+  ctx.font = `10px ${cssVar('--mono')}`;
+  ctx.textBaseline = 'top';
+  const ticks = Math.max(2, Math.min(8, Math.floor(columns / 150)));
+  for (let i = 0; i <= ticks; i++) {
+    const x = ACT.labels + (columns * i) / ticks;
+    ctx.fillRect(x, y - 4, 0.5, 4);
+    ctx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
+    const at = model.startMs + ((model.endMs - model.startMs) * i) / ticks;
+    // The date once, at the left; every other tick is a time of day, which is
+    // all that fits and all that changes.
+    ctx.fillText(i === 0 ? utc(at, false) : utc(at, false).slice(11), x, y + 1);
+  }
+  ctx.textAlign = 'left';
+}
+
+/** The value in one cell, from the flat (column, value) pairs. */
+function cellAt(flat, column) {
+  let low = 0;
+  let high = flat.length / 2 - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const at = flat[mid * 2];
+    if (at === column) return flat[mid * 2 + 1];
+    if (at < column) low = mid + 1;
+    else high = mid - 1;
+  }
+  return 0;
+}
+
+function activityAt(event) {
+  const model = S.activity;
+  if (!model?.rows.length) return null;
+  const canvas = $('act');
+  const box = canvas.getBoundingClientRect();
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  const row = Math.floor((y - ACT.top) / ACT.row);
+  const column = Math.round(x - ACT.labels);
+  if (row < 0 || row >= model.rows.length) return null;
+  if (column < 0 || column >= model.columns) return null;
+  return { peer: model.rows[row], column, x, y };
+}
+
+function showActivityTip(event) {
+  const tip = $('atip');
+  const hit = activityAt(event);
+  if (!hit) { tip.hidden = true; return; }
+
+  const { peer, column } = hit;
+  const at = S.activity.startMs + (S.activity.endMs - S.activity.startMs) * (column / S.activity.columns);
+  const unit = S.activity.byBytes ? bytes : num;
+  const inbound = cellAt(peer.in, column);
+  const outbound = cellAt(peer.out, column);
+  const mark = peer.marks.find((m) => Math.abs(m.col - column) <= 1);
+
+  tip.replaceChildren();
+  tip.append(el('div', 't', `${utc(at)} · peer ${peer.peerId}`.replace(' · ', '  ')));
+  if (peer.addr) tip.append(el('div', 't', peer.addr));
+  const table = el('table');
+  for (const [label, value, colour] of [
+    ['in', inbound ? unit(inbound) : '—', color(0)],
+    ['out', outbound ? unit(outbound) : '—', color(1)],
+  ]) {
+    const tr = el('tr');
+    const key = el('td');
+    const swatch = el('span', 'sw');
+    swatch.style.background = colour;
+    key.append(swatch, document.createTextNode(label));
+    tr.append(key, td(value, 'n'));
+    table.append(tr);
+  }
+  const totals = el('tr');
+  totals.append(td('all time', 'dim'), td(`${num(peer.messagesIn)} / ${num(peer.messagesOut)}`, 'n'));
+  table.append(totals);
+  tip.append(table);
+  if (mark) tip.append(el('div', 't', mark.kind.replace('_', ' ')));
+  if (!peer.marksComplete) tip.append(el('div', 't', 'earlier connection events not kept'));
+
+  tip.hidden = false;
+  // Placed against the panel, and flipped near the right edge so it never runs
+  // off the chart.
+  const panel = tip.parentElement.getBoundingClientRect();
+  const canvasBox = $('act').getBoundingClientRect();
+  const left = event.clientX - panel.left + 14;
+  tip.style.left = `${Math.min(left, panel.width - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${Math.max(4, event.clientY - panel.top - tip.offsetHeight - 10)}px`;
+  void canvasBox;
+}
+
 /* ------------------------------------------------------------------ relay */
 
 /**
@@ -2280,13 +2531,16 @@ function showTab(name) {
   for (const b of document.querySelectorAll('#tabs button')) {
     b.setAttribute('aria-selected', String(b.dataset.tab === name));
   }
-  for (const t of ["overview", "peers", "events", "sequence", "relay"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["overview", "peers", "events", "sequence", "relay", "activity"]) {
+    $(`tab-${t}`).hidden = t !== name;
+  }
   // Canvas and SVG have no size while hidden, so they are drawn on reveal.
   if (!S.session || S.dead) return;
   if (name === 'overview') drawBoth();
   if (name === 'events') refreshEvents();
   if (name === 'sequence') { buildSeqPicker(); drawSequence(); }
   if (name === "relay") renderRelay();
+  if (name === "activity") drawActivity();
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -2373,6 +2627,24 @@ function setup() {
   $("seq-ties").addEventListener("change", drawSequence);
   $("rsearch").addEventListener("input", paintRelay);
 
+  for (const [id, group] of [["asort-first", "asort"], ["asort-events", "asort"],
+                             ["aw-count", "aw"], ["aw-bytes", "aw"]]) {
+    $(id).addEventListener("click", () => {
+      for (const b of document.querySelectorAll(`[id^="${group}-"]`)) {
+        b.classList.toggle("on", b.id === id);
+      }
+      drawActivity();
+    });
+  }
+  for (const id of ["arows", "amin"]) $(id).addEventListener("change", drawActivity);
+  $("act").addEventListener("mousemove", showActivityTip);
+  $("act").addEventListener("mouseleave", () => { $("atip").hidden = true; });
+  $("act").addEventListener("click", (event) => {
+    const hit = activityAt(event);
+    if (hit) { showTab("peers"); selectPeer(hit.peer.peerId); }
+  });
+
+
   chartInteraction('tl', 'tip', true);
   chartInteraction('tl2', 'tip2', false);
 
@@ -2381,7 +2653,8 @@ function setup() {
     clearTimeout(resizing);
     resizing = setTimeout(() => {
       if (S.session && !S.dead && S.tab === 'overview') drawBoth();
-      if (S.session && !S.dead && S.tab === 'events') refreshEvents();
+      if (S.session && !S.dead && S.tab === "events") refreshEvents();
+      if (S.session && !S.dead && S.tab === "activity") drawActivity();
     }, 120);
   });
 }

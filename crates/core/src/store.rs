@@ -260,6 +260,14 @@ impl EventStore {
     pub fn peers(&self) -> &[u32] {
         &self.peer
     }
+
+    pub fn flags(&self) -> &[u8] {
+        &self.flags
+    }
+
+    pub fn sizes(&self) -> &[u32] {
+        &self.size
+    }
 }
 
 #[cfg(test)]

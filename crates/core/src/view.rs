@@ -544,6 +544,192 @@ fn relay_row(analysis: &Analysis, peer_id: u64, record: &relay::PeerRelay) -> Va
     })
 }
 
+/// A raster of per-peer activity over time: one row per peer, one column per
+/// pixel, split by direction.
+///
+/// Built by scanning the retained events once, which is what makes it exact:
+/// there is no per-peer-per-time aggregate kept during ingest, and adding one
+/// would cost memory proportional to peers times bins for a view most archives
+/// never open. The scan is linear over the columnar store and takes tens of
+/// milliseconds on a few million events.
+///
+/// Only *retained* events are in the store, so on an archive that exhausted its
+/// retention budget this covers the part that was kept. The caller is told, and
+/// says so.
+///
+/// `weight` is `bytes` to accumulate wire bytes instead of message counts.
+/// `sort` is `events` for the busiest peers first, anything else for
+/// first-seen order, which is what makes connection churn legible.
+#[allow(clippy::too_many_arguments)]
+pub fn peer_activity(
+    analysis: &Analysis,
+    filter: &Filter,
+    columns: usize,
+    max_rows: usize,
+    min_duration_ms: u64,
+    sort: &str,
+    weight: &str,
+) -> Value {
+    let columns = columns.clamp(1, 4096);
+    let (start, end) = activity_span(analysis, filter);
+    if end <= start {
+        return json!({
+            "columns": columns, "startMs": start, "endMs": end, "binMs": 0,
+            "rows": [], "peers": 0, "shown": 0, "max": 0, "partial": false,
+        });
+    }
+    let span = end - start;
+
+    // Peers worth a row: seen inside the window, and connected long enough to
+    // be worth one. A churn archive has hundreds of thousands of peers that
+    // lived under a second, and a row each would be a solid block of noise.
+    let mut candidates: Vec<&PeerStats> = analysis
+        .peers
+        .iter()
+        .filter(|p| {
+            p.duration_ms() >= min_duration_ms && p.last_seen >= start && p.first_seen <= end
+        })
+        .collect();
+    let total_candidates = candidates.len();
+    if sort == "events" {
+        candidates.sort_by(|a, b| b.events().cmp(&a.events()).then(a.peer_id.cmp(&b.peer_id)));
+    } else {
+        candidates.sort_by(|a, b| {
+            a.first_seen
+                .cmp(&b.first_seen)
+                .then(a.peer_id.cmp(&b.peer_id))
+        });
+    }
+    candidates.truncate(max_rows);
+
+    // Store peer index -> row. `usize::MAX` for peers with no row.
+    let mut row_of = vec![usize::MAX; analysis.peers.len()];
+    for (row, peer) in candidates.iter().enumerate() {
+        if let Some(slot) = row_of.get_mut(peer.index as usize) {
+            *slot = row;
+        }
+    }
+
+    let by_bytes = weight == "bytes";
+    let mut grid = vec![0u64; candidates.len() * columns * 2];
+    let mut peak = 0u64;
+
+    let timestamps = analysis.store.timestamps();
+    let peers = analysis.store.peers();
+    let flags = analysis.store.flags();
+    let sizes = analysis.store.sizes();
+    for i in 0..timestamps.len() {
+        let peer = peers[i];
+        if peer == NO_PEER {
+            continue;
+        }
+        let Some(&row) = row_of.get(peer as usize) else {
+            continue;
+        };
+        if row == usize::MAX {
+            continue;
+        }
+        let timestamp = timestamps[i];
+        if timestamp < start || timestamp > end {
+            continue;
+        }
+        // Only directed messages have a lane; connection events are drawn from
+        // the lifecycle marks instead.
+        if flags[i] & crate::store::flags::HAS_DIRECTION == 0 {
+            continue;
+        }
+        let lane = usize::from(flags[i] & crate::store::flags::INBOUND != 0);
+        let column = (((timestamp - start) as u128 * columns as u128) / span as u128) as usize;
+        let column = column.min(columns - 1);
+        let slot = &mut grid[(row * columns + column) * 2 + lane];
+        *slot += if by_bytes { u64::from(sizes[i]) } else { 1 };
+        peak = peak.max(*slot);
+    }
+
+    let column_of = |timestamp: u64| -> Option<usize> {
+        (timestamp >= start && timestamp <= end).then(|| {
+            ((((timestamp - start) as u128 * columns as u128) / span as u128) as usize)
+                .min(columns - 1)
+        })
+    };
+
+    let rows: Vec<Value> = candidates
+        .iter()
+        .enumerate()
+        .map(|(row, peer)| {
+            // Sparse: a column with nothing in it is most of them for most
+            // peers, and sending those would dominate the payload.
+            let mut inbound = Vec::new();
+            let mut outbound = Vec::new();
+            for column in 0..columns {
+                let base = (row * columns + column) * 2;
+                if grid[base + 1] > 0 {
+                    inbound.push(column as u64);
+                    inbound.push(grid[base + 1]);
+                }
+                if grid[base] > 0 {
+                    outbound.push(column as u64);
+                    outbound.push(grid[base]);
+                }
+            }
+            let marks: Vec<Value> = peer
+                .lifecycle
+                .iter()
+                .filter_map(|e| {
+                    column_of(e.timestamp).map(|column| {
+                        json!({ "col": column, "kind": e.kind.as_str(), "timestamp": e.timestamp })
+                    })
+                })
+                .collect();
+            json!({
+                "peerId": peer.peer_id,
+                "addr": peer.addr,
+                "connType": peer.conn_type.map(conn_type_name),
+                "firstSeen": peer.first_seen,
+                "lastSeen": peer.last_seen,
+                "durationMs": peer.duration_ms(),
+                "events": peer.events(),
+                "messagesIn": peer.messages_in,
+                "messagesOut": peer.messages_out,
+                "in": inbound,
+                "out": outbound,
+                "marks": marks,
+                // The lifecycle list is capped, so say when marks are missing.
+                "marksComplete": peer.lifecycle_total as usize <= peer.lifecycle.len(),
+            })
+        })
+        .collect();
+
+    json!({
+        "columns": columns,
+        "startMs": start,
+        "endMs": end,
+        "binMs": span as f64 / columns as f64,
+        "rows": rows,
+        "peers": total_candidates,
+        "shown": candidates.len(),
+        "max": peak,
+        "byBytes": by_bytes,
+        // Retention stopped short, so this covers only what was kept.
+        "partial": analysis.store.is_full(),
+        "retained": analysis.store.len(),
+        "totalEvents": analysis.total_events,
+    })
+}
+
+/// The time window the activity chart covers.
+fn activity_span(analysis: &Analysis, filter: &Filter) -> (u64, u64) {
+    let start = filter
+        .time_from
+        .or(analysis.first_timestamp)
+        .unwrap_or_default();
+    let end = filter
+        .time_to
+        .or(analysis.last_timestamp)
+        .unwrap_or_default();
+    (start, end)
+}
+
 /// Transaction relay: who announced what first, and what the duplicates cost.
 ///
 /// `sort` picks the column: `first`, `late`, `win`, `lag`, `delivered` or

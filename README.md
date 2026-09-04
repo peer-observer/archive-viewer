@@ -90,6 +90,23 @@ where a reply also arrives unsolicited, which `inv`, `headers`, `addr` and
 `cmpctblock` all do. Exchanges are matched within one screenful, so one spanning
 a page boundary is not drawn. The toggle in the toolbar turns them off.
 
+**Activity** — every peer at once: one row per peer, one column per pixel of
+time, a mark for the messages exchanged in each slice. Inbound sits above the
+row's line and outbound below it, shaded by how many (or by how many bytes),
+and connection events are vertical ticks spanning the row. Sorted by first
+connection it draws the shape of a node's peer turnover; sorted by traffic it
+puts the peers that matter at the top.
+
+Peers are filtered by how long they stayed connected, because they have to be:
+the sample archive of a churning node holds 587,383 peers, of which 562 lasted a
+minute. Drawing a row each would be a solid block.
+
+The raster is built by scanning the retained events on each redraw — around
+40 ms for two and a half million — rather than kept as an aggregate during
+ingest, which would cost peers times bins of memory for a view most archives
+never open. That does mean it covers only the events retention kept, and it says
+so when that is not all of them.
+
 **Relay** — the question an archive can answer that a running node cannot be
 asked after the fact: for every transaction, which peer announced it first, how
 far behind the others were, and how many bytes went on receiving something the
